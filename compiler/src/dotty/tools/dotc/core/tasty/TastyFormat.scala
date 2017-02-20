@@ -437,6 +437,7 @@ object TastyFormat {
        | SCALA2X
        | DEFAULTparameterized
        | STABLE
+       | MACRO
        | ANNOTATION
        | PRIVATEqualified
        | PROTECTEDqualified => true
@@ -484,6 +485,7 @@ object TastyFormat {
     case ARTIFACT => "ARTIFACT"
     case MUTABLE => "MUTABLE"
     case LABEL => "LABEL"
+    case MACRO => "MACRO"
     case FIELDaccessor => "FIELDaccessor"
     case CASEaccessor => "CASEaccessor"
     case COVARIANT => "COVARIANT"

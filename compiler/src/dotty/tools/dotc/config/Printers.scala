@@ -25,6 +25,7 @@ object Printers {
   val implicits: Printer = noPrinter
   val implicitsDetailed: Printer = noPrinter
   val inlining: Printer = noPrinter
+  val macros: Printer = noPrinter
   val overload: Printer = noPrinter
   val patmatch: Printer = noPrinter
   val pickling: Printer = noPrinter

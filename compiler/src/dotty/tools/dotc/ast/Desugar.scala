@@ -699,6 +699,7 @@ object desugar {
       else defDef(tree)
     case tree: ModuleDef => moduleDef(tree)
     case tree: PatDef => patDef(tree)
+    case tree: Thicket => Thicket(tree.trees.map(defTree))
   }
 
   /**     { stats; <empty > }
