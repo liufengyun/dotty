@@ -1,0 +1,31 @@
+# adapted from https://github.com/sbt/sbt-native-packager/blob/master/appveyor.yml
+version: '{build}'
+os: Windows Server 2012
+environment:
+  matrix:
+    - bash: C:\MinGW\msys\1.0\bin\bash
+      pack: dist
+    - bash: C:\MinGW\msys\1.0\bin\bash
+      pack: dist-bootstrapped
+    - bash: C:\cygwin\bin\bash
+      pack: dist
+    - bash: C:\cygwin\bin\bash
+      pack: dist-bootstrapped
+matrix:
+  fast_finish: true
+
+install:
+  - cmd: choco install sbt -ia "INSTALLDIR=""C:\sbt"""
+  - cmd: SET PATH=C:\sbt\bin;%JAVA_HOME%\bin;%PATH%
+  - cmd: SET SBT_OPTS=-XX:MaxPermSize=2g -Xmx4g
+build_script:
+  - sbt clean compile
+  - ps: sbt $env:pack/pack
+test_script:
+  - ps: $env:bash $env:pack\target\pack\bin\dotc tests\pos\HelloWorld.scala
+  - ps: $env:bash $env:pack\target\pack\bin\dotr HelloWorld
+cache:
+  - C:\sbt\
+  - C:\Users\appveyor\.m2
+  - C:\Users\appveyor\.ivy2
+
