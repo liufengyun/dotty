@@ -20,7 +20,7 @@ install:
   - cmd: SET SBT_OPTS=-XX:MaxPermSize=2g -Xmx4g
 build_script:
   - sbt clean compile
-  - ps: sbt $env:pack/pack
+  - ps: sbt $env:pack/pack 2>&1
 test_script:
   - ps: $env:bash $env:pack\target\pack\bin\dotc tests\pos\HelloWorld.scala
   - ps: $env:bash $env:pack\target\pack\bin\dotr HelloWorld
