@@ -31,19 +31,6 @@ package object macros {
     new Proxy(clazz, module)
   }
 
-  /** Whether an Apply tree is quasiquote ?
-   *  @param symbol the symbol of the function in the Apply tree
-   *  @param tree   the Apply tree
-   */
-  def isQuasiquote(symbol: Symbol)(implicit ctx: Context): Boolean =
-    (symbol.isContainedIn(defn.q) || symbol.isContainedIn(defn.t)) &&
-      (symbol.name == nme.apply || symbol.name == nme.unapply)
-
-  /** Expand a quasiquote tree */
-  def expandQuasiquote(tree: Tree, isTerm: Boolean)(implicit ctx: Context): Tree = {
-    forObject("scala.gestalt.dotty.Expander").apply("expandQuasiquote", tree, Boolean.box(isTerm), ctx).asInstanceOf[Tree]
-  }
-
   /** Expand annotation macros */
   def expandAnnotMacro(mdef: DefTree)(implicit ctx: Context): Tree = {
     if (
