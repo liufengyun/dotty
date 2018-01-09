@@ -545,7 +545,6 @@ class TreeUnpickler(reader: TastyReader,
           case SCALA2X => addFlag(Scala2x)
           case DEFAULTparameterized => addFlag(DefaultParameterized)
           case STABLE => addFlag(Stable)
-          case MACRO => addFlag(Macro)
           case PRIVATEqualified =>
             readByte()
             privateWithin = readType().typeSymbol
