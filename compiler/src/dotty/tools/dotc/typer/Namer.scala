@@ -387,11 +387,8 @@ class Namer { typer: Typer =>
   /** Expand tree and store in `expandedTree` */
   def expand(tree: Tree)(implicit ctx: Context): Unit = tree match {
     case mdef: DefTree =>
-      // expand possible annotation macros
-      val macroExpanded = if (ctx.macrosEnabled) macros.expandAnnotMacro(mdef) else mdef
-
       // transform macro definitions
-      val macrosTransformed = if (ctx.macrosEnabled) macros.transform(macroExpanded) else macroExpanded
+      val macrosTransformed = if (ctx.macrosEnabled) macros.transform(mdef) else mdef
 
       // desugaring must come last -- due to constraints in desugaring ClassDef
       val expanded = desugar.defTree(macrosTransformed)
