@@ -162,6 +162,7 @@ class CompilationTests extends ParallelTesting {
     compileFilesInDir("tests/neg-custom-args/isInstanceOf", allowDeepSubtypes and "-Xfatal-warnings") +
     compileFile("tests/neg-custom-args/i3627.scala", allowDeepSubtypes) +
     compileFile("tests/neg-custom-args/matchtype-loop.scala", allowDeepSubtypes) +
+    compileFilesInDir("tests/neg-custom-args/safe-init", defaultOptions and "-Xfatal-warnings") +
     compileFile("tests/neg-custom-args/completeFromSource/nested/Test1.scala", defaultOptions.and("-sourcepath", "tests/neg-custom-args", "-scansource"))
   }.checkExpectedErrors()
 

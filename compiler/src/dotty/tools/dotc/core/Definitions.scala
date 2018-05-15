@@ -814,6 +814,10 @@ class Definitions {
   def SetterMetaAnnot(implicit ctx: Context) = SetterMetaAnnotType.symbol.asClass
   lazy val ShowAsInfixAnotType = ctx.requiredClassRef("scala.annotation.showAsInfix")
   def ShowAsInfixAnnot(implicit ctx: Context) = ShowAsInfixAnotType.symbol.asClass
+  lazy val PartialAnnotType = ctx.requiredClassRef("scala.annotation.partial")
+  def PartialAnnot(implicit ctx: Context) = PartialAnnotType.symbol.asClass
+  lazy val InitAnnotType = ctx.requiredClassRef("scala.annotation.init")
+  def InitAnnot(implicit ctx: Context) = InitAnnotType.symbol.asClass
 
   // convenient one-parameter method types
   def methOfAny(tp: Type) = MethodType(List(AnyType), tp)
