@@ -282,23 +282,13 @@ object DataFlowChecker {
     def removeDefs(defs: List[Symbol]) = _defns --= defs
     def defn(sym: Symbol)         = _defns(sym)
 
-    def diagnose(implicit ctx: Context) = {
-      debug(s"------------ $currentClass ------------->")
-      debug("not initialized: " + _nonInit)
-      debug("partial initialized: " + _partialSyms)
-      debug("lazy forced: " + _lazyForced)
-      debug("latent symbols: " + _latentSyms.keys)
-      debug(s"<--------------------------------")
-    }
-
-    def show(implicit ctx: Context) = {
-      println(s"------------ $currentClass ------------->")
-      println("not initialized: " + _nonInit)
-      println("partial initialized: " + _partialSyms)
-      println("lazy forced: " + _lazyForced)
-      println("latent symbols: " + _latentSyms.keys)
-      println(s"<--------------------------------")
-    }
+    def show(padding: String): String =
+      s"""~ $padding | ------------ $currentClass -------------
+          ~ $padding | not initialized:  ${_nonInit}
+          ~ $padding | partial initialized: ${_partialSyms}
+          ~ $padding | lazy forced:  ${_lazyForced}
+          ~ $padding | latent symbols: ${_latentSyms.keys}"""
+      .stripMargin('~')
   }
 
   class FreshEnv extends Env {
@@ -323,6 +313,15 @@ object DataFlowChecker {
 
     def derived(effects: Effects = effects, partial: Boolean = partial, latentEffects: LatentEffects = latentEffects, env: Env = env): Res =
       Res(env, effects, partial, latentEffects)
+
+    def show(padding: String): String =
+      s"""~Res(
+          ~${env.show(padding)}
+          ~ $padding | effects = $effects
+          ~ $padding | partial = $partial
+          ~ $padding | latent  = $isLatent
+          ~ $padding)"""
+      .stripMargin('~')
   }
 }
 
@@ -330,11 +329,28 @@ class DataFlowChecker {
 
   import tpd._
 
+  var depth: Int = 0
+  val indentTab = " "
+
+  def trace(msg: String)(body: => Res) = {
+    indentedDebug(s" ==> $msg?")
+    depth += 1
+    val res = body
+    depth -= 1
+    indentedDebug(s" <== $msg = ${res.show(padding)}")
+    res
+  }
+
+  def padding = indentTab * depth
+
+  def indentedDebug(msg: String) =
+    debug(s"${padding}$msg")
+
   def checkForce(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res =
     if (sym.is(Lazy) && !env.isForced(sym)) {
       env.addForced(sym)
       val rhs = env.defn(sym)
-      val res = apply(env.fresh, rhs)
+      val res = apply(env, rhs)
 
       if (res.partial) res.env.addPartial(sym)
       if (res.isLatent) res.env.addLatent(sym, res.latentEffects)
@@ -346,7 +362,6 @@ class DataFlowChecker {
 
   def checkCall(fun: TermRef, tree: Tree, env: Env)(implicit ctx: Context): Res = {
     val sym = fun.symbol
-    debug("checking call " + sym)
     if (env.isChecking(sym)) {
       debug("recursive call found during initialization")
       Res(env)
@@ -361,7 +376,7 @@ class DataFlowChecker {
         val res = apply(env, rhs)
 
         if (res.effects.nonEmpty) res.derived(effects = Vector(Call(sym, res.effects ++ effs, tree.pos)))
-        else res
+        else res.derived(effects = effs)
       }
     }
   }
@@ -465,7 +480,7 @@ class DataFlowChecker {
   def localRef(tp: Type, env: Env)(implicit ctx: Context): Type = tp match {
     case TermRef(ThisType(tref), _) if tref.symbol.isContainedIn(env.currentClass) => tp
     case TermRef(SuperType(ThisType(tref), _), _) if tref.symbol.isContainedIn(env.currentClass) => tp
-    case tmref @ TermRef(NoPrefix, _) if tmref.symbol.isContainedIn(env.currentClass) => tmref
+    case ref @ TermRef(NoPrefix, _) if ref.symbol.isContainedIn(env.currentClass) => ref
     case TermRef(tp: TermRef, _) => localRef(tp, env)
     case _ => NoType
   }
@@ -511,6 +526,7 @@ class DataFlowChecker {
   }
 
   def checkTermRef(tree: Tree, env: Env)(implicit ctx: Context): Res = {
+    indentedDebug(s"is ${tree.show} local ? = " + localRef(tree.tpe, env).exists)
     val ref: TermRef = localRef(tree.tpe, env) match {
       case NoType         => return Res(env = env)
       case tmref: TermRef => tmref
@@ -526,29 +542,27 @@ class DataFlowChecker {
 
       if (ref.symbol.is(Lazy)) {    // a forced lazy val could be partial and latent
         val res2 = checkForce(ref.symbol, tree, env)
-        res.partial ||= res2.partial
-        if (res2.isLatent) res.latentEffects = res2.latentEffects
-        res.derived(env = res2.env, effects = res.effects ++ res2.effects)
+        res2.partial ||= res.partial
+        if (res.isLatent) res2.latentEffects = res.latentEffects
+        return res2.derived(effects = res.effects ++ res2.effects)
       }
       else if (ref.symbol.is(Method) && ref.symbol.info.isInstanceOf[ExprType]) { // parameter-less call
         val res2 = checkCall(ref, tree, env)
-        res.partial = res2.partial
-        res.latentEffects = res2.latentEffects
-        res.derived(env = res2.env, effects = res.effects ++ res2.effects)
+        return res2.derived(effects = res.effects ++ res2.effects)
       }
       else if (ref.symbol.is(Deferred) && !ref.symbol.hasAnnotation(defn.InitAnnot) && ref.symbol.owner == env.currentClass) {
         res += UseAbstractDef(ref.symbol, tree.pos)
       }
     }
-    else if (isPartial(ref.prefix, env) && !isSafeParentAccess(ref, env))
+    else if (isPartial(ref.prefix, env) && !isSafeParentAccess(ref, env)) {
       res += Member(ref.symbol, tree, tree.pos)
+    }
 
     res
   }
 
   def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
     val body = env.defn(sym)
-    debug("checking closure: " + body.show)
     Res(
       env = env,
       latentEffects = (env: Env) => apply(env, body).effects,    // TODO: keep res
@@ -576,7 +590,7 @@ class DataFlowChecker {
     res
   }
 
-  def apply(env: Env, tree: Tree)(implicit ctx: Context): Res = tree match {
+  def apply(env: Env, tree: Tree)(implicit ctx: Context): Res = trace("checking " + tree.show)(tree match {
     case tmpl: Template =>
       val stats = tmpl.body.filter {
         case vdef : ValDef  =>
@@ -658,11 +672,11 @@ class DataFlowChecker {
         case tdef: TypeDef if tdef.isClassDef  =>
           tdef.symbol -> tdef.rhs
       }
-      debug("local methods: " + meths.map(_._1))
 
       env.addDefs(meths)
 
       val res = stats.foldLeft(Res(env = env)) { (acc, stat) =>
+        indentedDebug(s"acc = ${acc.show(padding)}")
         val res1 = apply(acc.env, stat)
         acc.derived(env = res1.env, effects = acc.effects ++ res1.effects)
       }
@@ -671,8 +685,10 @@ class DataFlowChecker {
 
       res1.env.removeDefs(meths.map(_._1))
 
-      res1
+      res1.derived(effects = res.effects ++ res1.effects)
+    case Typed(expr, tpd) =>
+      apply(env, expr)
     case _ =>
       Res(env = env)
-  }
+  })
 }
