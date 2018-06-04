@@ -1,10 +1,10 @@
-import scala.annotation.partial
+import scala.annotation.init
 
 trait Foo {
   val x = "world"
   foo(5)                       // error
 
-  def foo(n: Int): String      // error: `@partial` needed
+  def foo(n: Int): String      // error: `@init` needed
 }
 
 
@@ -12,6 +12,6 @@ trait Bar {
   val x = "world"
   foo(5)
 
-  @partial
+  @init
   def foo(n: Int): String
 }

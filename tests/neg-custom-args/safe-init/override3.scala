@@ -5,7 +5,7 @@ trait Foo {
   val x = "world"
   val y = foo(5)
 
-  @partial
+  @init
   def foo(n: Int): String
 }
 

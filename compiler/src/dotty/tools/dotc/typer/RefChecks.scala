@@ -403,8 +403,6 @@ object RefChecks {
       } else if (!compatibleTypes(memberTp(self), otherTp(self)) &&
                  !compatibleTypes(memberTp(upwardsSelf), otherTp(upwardsSelf))) {
         overrideError("has incompatible type" + err.whyNoMatchStr(memberTp(self), otherTp(self)))
-      } else if (other.hasAnnotation(defn.InitAnnot)) {
-        overrideError("may not override initialization methods")
       } else {
         checkOverrideDeprecated()
       }

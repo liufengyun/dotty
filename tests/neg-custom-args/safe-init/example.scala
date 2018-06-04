@@ -1,4 +1,4 @@
-import scala.annotation.{ partial, init }
+import scala.annotation.partial
 
 
 class Parent(x: Int) {
@@ -31,7 +31,6 @@ class Parent(x: Int) {
   val temp1 = l1                               // ok, name init
   val temp2 = l2                               // error: addr not initialized
 
-  // init methods are final, it's an anti-pattern to override init methods
   private def f(m: Int) =
     m + list.size                              // error: `f` is called at L19 before `list` is initialized
 

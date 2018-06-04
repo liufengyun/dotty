@@ -1,5 +1,5 @@
 trait Foo {
-  val name: String
+  val name: String                             // error: @init required
   val message = "hello, " + name               // error: name should not be used during initialization
 }
 

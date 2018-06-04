@@ -1,10 +1,10 @@
 trait Foo {
-  @scala.annotation.partial
+  @scala.annotation.init
   def name: String
 
   val message = "hello, " + name
 }
 
 class Bar extends Foo {
-  val name = "Jack"              // error: partial cannot be implemented by val
+  val name = "Jack"              // error: init cannot be implemented by val
 }
