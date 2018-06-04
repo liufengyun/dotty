@@ -151,12 +151,12 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     )
     noninit += decl
 
-    val env: Res = (new FreshEnv).setNonInit(noninit).setPartialSyms(partial).setCurrentClass(cls)
+    val env: Env = (new FreshEnv).setNonInit(noninit).setPartialSyms(partial).setCurrentClass(cls)
     val checker = new DataFlowChecker
 
     val res = checker(env, tree)
     res.effects.foreach(_.report)
-    res.nonInit.foreach { sym =>
+    res.env.nonInit.foreach { sym =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 
@@ -226,7 +226,7 @@ object DataFlowChecker {
   }
 
   type Effects = Vector[Effect]
-  type LatentEffects = Res => Vector[Effect]
+  type LatentEffects = Env => Vector[Effect]
   // TODO: handle curried functions & methods uniformly
   // type LatentEffects = Env => (Vector[Effect], LatentEffects)
 
@@ -239,7 +239,7 @@ object DataFlowChecker {
     protected var _defns: Map[Symbol, tpd.Tree] = Map()
     protected var _methChecking: Set[Symbol] = Set()
 
-    def fresh: FreshEnv = this.clone.asInstanceOf[FreshEnv].noRes
+    def fresh: FreshEnv = this.clone.asInstanceOf[FreshEnv]
 
     def currentClass = _cls
 
@@ -263,10 +263,11 @@ object DataFlowChecker {
     def isChecking(sym: Symbol)   = _methChecking.contains(sym)
     def addChecking(sym: Symbol)  = _methChecking += sym
     def removeChecking(sym: Symbol) = _methChecking -= sym
-    def checking(sym: Symbol)(fn: => Unit) = {
+    def checking[T](sym: Symbol)(fn: => T) = {
       addChecking(sym)
-      fn
+      val res = fn
       removeChecking(sym)
+      res
     }
 
     def initialized: Boolean      = _nonInit.isEmpty && _partialSyms.size == 1
@@ -280,35 +281,6 @@ object DataFlowChecker {
     def addDefs(defs: List[(Symbol, tpd.Tree)]) = _defns ++= defs
     def removeDefs(defs: List[Symbol]) = _defns --= defs
     def defn(sym: Symbol)         = _defns(sym)
-  }
-
-  // TODO: change Env to be a field of Res
-  class Res extends Env {
-    var effects: Effects = Vector.empty
-    var partial: Boolean = false
-    var latentEffects: LatentEffects = null
-
-    def force(env: Res): Effects = latentEffects(env)
-    def isLatent = latentEffects != null
-
-    def +=(eff: Effect): Unit = effects = effects :+ eff
-    def ++=(effs: Effects) = effects ++= effs
-
-    def propagate(res: Res, withEffs: Boolean = true) = {
-      this._nonInit = res._nonInit
-      this._lazyForced = res._lazyForced
-      if (withEffs) this.effects ++= res.effects
-      this.partial = res.partial
-      this.latentEffects = res.latentEffects
-    }
-
-    def noRes: this.type = {
-      effects = Vector.empty
-      partial = false
-      latentEffects = null
-
-      this
-    }
 
     def diagnose(implicit ctx: Context) = {
       debug(s"------------ $currentClass ------------->")
@@ -329,132 +301,157 @@ object DataFlowChecker {
     }
   }
 
-  class FreshEnv extends Res {
+  class FreshEnv extends Env {
     def setPartialSyms(partialSyms: Set[Symbol]): this.type = { this._partialSyms = partialSyms; this }
     def setNonInit(nonInit: Set[Symbol]): this.type = { this._nonInit = nonInit; this }
     def setLazyForced(lazyForced: Set[Symbol]): this.type = { this._lazyForced = lazyForced; this }
     def setCurrentClass(cls: ClassSymbol): this.type = { this._cls = cls; this }
   }
+
+  case class Res(
+    val env: Env,
+    var effects: Effects = Vector.empty,
+    var partial: Boolean = false,
+    var latentEffects: LatentEffects = null
+  ) {
+
+    def force(env: Env): Effects = latentEffects(env)
+    def isLatent = latentEffects != null
+
+    def +=(eff: Effect): Unit = effects = effects :+ eff
+    def ++=(effs: Effects) = effects ++= effs
+
+    def derived(effects: Effects = effects, partial: Boolean = partial, latentEffects: LatentEffects = latentEffects, env: Env = env): Res =
+      Res(env, effects, partial, latentEffects)
+  }
 }
 
-class DataFlowChecker extends tpd.TreeAccumulator[Res] {
+class DataFlowChecker {
 
   import tpd._
 
-  def checkForce(sym: Symbol, tree: Tree, env: Res)(implicit ctx: Context) =
+  def checkForce(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res =
     if (sym.is(Lazy) && !env.isForced(sym)) {
       env.addForced(sym)
       val rhs = env.defn(sym)
-      val env2 = apply(env.fresh, rhs)
+      val res = apply(env.fresh, rhs)
 
-      if (env2.effects.nonEmpty) env += Force(sym, env2.effects, tree.pos)
+      if (res.partial) res.env.addPartial(sym)
+      if (res.isLatent) res.env.addLatent(sym, res.latentEffects)
 
-      env.propagate(env2, withEffs = false)
+      if (res.effects.nonEmpty) res.derived(effects = Vector(Force(sym, res.effects, tree.pos)))
+      else res
     }
+    else Res(env = env)
 
-  def checkCall(fun: TermRef, tree: Tree, env: Res)(implicit ctx: Context): Res = {
+  def checkCall(fun: TermRef, tree: Tree, env: Env)(implicit ctx: Context): Res = {
     val sym = fun.symbol
     debug("checking call " + sym)
     if (env.isChecking(sym)) {
       debug("recursive call found during initialization")
+      Res(env)
     }
     else {
+      var effs = Vector.empty[Effect]
       if (!(sym.hasAnnotation(defn.InitAnnot) || sym.isEffectivelyFinal || isDefaultGetter(sym)))
-        env += OverrideRisk(sym, tree.pos)
+        effs = effs :+ OverrideRisk(sym, tree.pos)
 
       env.checking(sym) {
         val rhs = env.defn(sym)
-        val env2 = apply(env.fresh, rhs)
+        val res = apply(env, rhs)
 
-        env.propagate(env2, withEffs = false)
-
-        if (env2.effects.nonEmpty) env += Call(sym, env2.effects, tree.pos)
+        if (res.effects.nonEmpty) res.derived(effects = Vector(Call(sym, res.effects ++ effs, tree.pos)))
+        else res
       }
     }
-
-    env
   }
 
-  def checkParams(sym: Symbol, paramInfos: List[Type], args: List[Tree], env: Res)(implicit ctx: Context) = {
+  def checkParams(sym: Symbol, paramInfos: List[Type], args: List[Tree], env: Env)(implicit ctx: Context): Res = {
     def isParamPartial(index: Int) = paramInfos(index).hasAnnotation(defn.PartialAnnot)
 
+    var effs = Vector.empty[Effect]
+    var partial = false
+
     args.zipWithIndex.foreach { case (arg, index) =>
-      val env2 = apply(env.fresh, arg)
-      env.propagate(env2)
-      env.partial |= env2.partial
+      val res = apply(env, arg)
+      effs ++= res.effects
+      partial = partial || res.partial
 
 
-      if (env2.isLatent) {
-        val effs = env2.latentEffects(env.fresh)                   // latent values are not partial
-        if (effs.nonEmpty) {
-          env.partial = true
-          if (!isParamPartial(index)) env += Latent(arg, effs)
+      if (res.isLatent) {
+        val effs2 = res.latentEffects.apply(env)                   // latent values are not partial
+        if (effs2.nonEmpty) {
+          partial = true
+          if (!isParamPartial(index)) effs = effs :+ Latent(arg, effs2)
         }
       }
-      else if (env2.partial && !isParamPartial(index)) env += Argument(sym, arg)
+      else if (res.partial && !isParamPartial(index)) effs = effs :+ Argument(sym, arg)
     }
+
+    Res(env = env, effects = effs, partial = partial)
   }
 
-  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[tpd.Tree]], env: Res)(implicit ctx: Context): Res = {
+  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[tpd.Tree]], env: Env)(implicit ctx: Context): Res = {
     val paramInfos = init.widen.paramInfoss.flatten
     val args = argss.flatten
 
-    env.partial = false
-    checkParams(tref.symbol, paramInfos, args, env)
+    val res1 = checkParams(tref.symbol, paramInfos, args, env)
 
-    if (!isPartial(tref.prefix, env) || isSafeParentAccess(tref, env)) return env
+    if (!isPartial(tref.prefix, env) || isSafeParentAccess(tref, res1.env)) return res1
 
-    if (!isLexicalRef(tref, env))
-      env += PartialNew(tref.prefix, tref.symbol, tree.pos)
+    if (!isLexicalRef(tref, res1.env)) {
+      res1 += PartialNew(tref.prefix, tref.symbol, tree.pos)
+      res1
+    }
     else {
       if (env.isChecking(tref.symbol)) {
         debug("recursive call found during initialization")
+        res1
       }
-      else env.checking(tref.symbol) {
+      else res1.env.checking(tref.symbol) {
         val tmpl = env.defn(tref.symbol)
-        val env2 = apply(env.fresh, tmpl)
-        if (env2.effects.nonEmpty) env += Instantiate(tref.symbol, env2.effects, tree.pos)
+        val res2 = apply(res1.env, tmpl)
+        if (res2.effects.nonEmpty) res1 += Instantiate(tref.symbol, res2.effects, tree.pos)
+        res1.derived(env = res2.env)
       }
     }
-
-    env
   }
 
-  def checkApply(tree: tpd.Tree, fun: Tree, args: List[Tree], env: Res)(implicit ctx: Context): Res = {
-    val env2 = apply(env.fresh, fun)
-    env.propagate(env2)
+  def checkApply(tree: tpd.Tree, fun: Tree, args: List[Tree], env: Env)(implicit ctx: Context): Res = {
+    val res1 = apply(env, fun)
 
     val paramInfos = fun.tpe.widen.asInstanceOf[MethodType].paramInfos
+    val res2 = checkParams(fun.symbol, paramInfos, args, res1.env)
 
-    checkParams(fun.symbol, paramInfos, args, env)
-    env.partial = false
-    env.latentEffects = null
+    var effs = res1.effects ++ res2.effects
 
     // function apply: see TODO for LatentEffects
-    if (env2.isLatent) {
-      val effs = env2.latentEffects(env)
-      if (effs.nonEmpty) env += Latent(tree, effs)
+    if (res1.isLatent) {
+      val effs2 = res1.latentEffects.apply(res2.env)
+      if (effs2.nonEmpty) effs = effs :+ Latent(tree, effs2)
     }
 
     if (!tree.tpe.isInstanceOf[MethodOrPoly]) {     // check when fully applied
       val mt = methPart(tree)
       mt.tpe match {
         case ref: TermRef if isPartial(ref.prefix, env) && isLexicalRef(ref, env) =>
-          checkCall(ref, tree, env)
+          val res3 = checkCall(ref, tree, res2.env)
+          return res3.derived(effects = effs ++ res3.effects)
         case _ =>
       }
     }
 
-    env
+    Res(env = res2.env, effects = effs)
   }
 
-  def checkSelect(tree: Select, env: Res)(implicit ctx: Context): Res = {
-    apply(env, tree.qualifier)
+  def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
+    val res = apply(env, tree.qualifier)
 
-    if (env.partial)
-      env += Member(tree.symbol, tree.qualifier, tree.pos)
+    // TODO: add latent effects of methods here
+    if (res.partial)
+      res += Member(tree.symbol, tree.qualifier, tree.pos)
 
-    env
+    res
   }
 
   /** return the top-level local term within `cls` refered by `tp`, NoType otherwise.
@@ -506,66 +503,80 @@ class DataFlowChecker extends tpd.TreeAccumulator[Res] {
   def hasPartialParam(clazz: Symbol, env: Env)(implicit ctx: Context): Boolean =
     env.currentClass.paramAccessors.exists(_.hasAnnotation(defn.PartialAnnot))
 
-  def isPartial(tp: Type, env: Res)(implicit ctx: Context): Boolean = tp match {
+  def isPartial(tp: Type, env: Env)(implicit ctx: Context): Boolean = tp match {
     case tmref: TermRef             => env.isPartial(tmref.symbol)
     case ThisType(tref)             => env.isPartial(tref.symbol)
     case SuperType(thistp, _)       => isPartial(thistp, env)        // super is partial if `thistp` is partial
     case _                          => false
   }
 
-  def checkTermRef(tree: Tree, env: Res)(implicit ctx: Context): Res = {
+  def checkTermRef(tree: Tree, env: Env)(implicit ctx: Context): Res = {
     val ref: TermRef = localRef(tree.tpe, env) match {
-      case NoType         => return env
+      case NoType         => return Res(env = env)
       case tmref: TermRef => tmref
     }
 
-    if (env.isPartial(ref.symbol)) env.partial = true
-    if (env.isLatent(ref.symbol)) env.latentEffects = env.latentEffects(ref.symbol)
+    val res = Res(env = env)
+
+    if (env.isPartial(ref.symbol)) res.partial = true
+    if (env.isLatent(ref.symbol)) res.latentEffects = env.latentEffects(ref.symbol)
 
     if (isLexicalRef(ref, env)) {
-      if (env.isNotInit(ref.symbol)) env += Uninit(ref.symbol, tree.pos)
+      if (env.isNotInit(ref.symbol)) res += Uninit(ref.symbol, tree.pos)
 
-      if (ref.symbol.is(Lazy))
-        checkForce(ref.symbol, tree, env)
-      else if (ref.symbol.is(Method) && ref.symbol.info.isInstanceOf[ExprType]) // parameter-less call
-        checkCall(ref, tree, env)
-      else if (ref.symbol.is(Deferred) && !ref.symbol.hasAnnotation(defn.InitAnnot) && ref.symbol.owner == env.currentClass)
-        env += UseAbstractDef(ref.symbol, tree.pos)
+      if (ref.symbol.is(Lazy)) {    // a forced lazy val could be partial and latent
+        val res2 = checkForce(ref.symbol, tree, env)
+        res.partial ||= res2.partial
+        if (res2.isLatent) res.latentEffects = res2.latentEffects
+        res.derived(env = res2.env, effects = res.effects ++ res2.effects)
+      }
+      else if (ref.symbol.is(Method) && ref.symbol.info.isInstanceOf[ExprType]) { // parameter-less call
+        val res2 = checkCall(ref, tree, env)
+        res.partial = res2.partial
+        res.latentEffects = res2.latentEffects
+        res.derived(env = res2.env, effects = res.effects ++ res2.effects)
+      }
+      else if (ref.symbol.is(Deferred) && !ref.symbol.hasAnnotation(defn.InitAnnot) && ref.symbol.owner == env.currentClass) {
+        res += UseAbstractDef(ref.symbol, tree.pos)
+      }
     }
     else if (isPartial(ref.prefix, env) && !isSafeParentAccess(ref, env))
-      env += Member(ref.symbol, tree, tree.pos)
-
-    env
-  }
-
-  def checkClosure(sym: Symbol, tree: Tree, env: Res)(implicit ctx: Context): Res = {
-    val body = env.defn(sym)
-    debug("checking closure: " + body.show)
-    env.latentEffects = (env: Res) => apply(env, body).effects
-    env.partial = false
-    env
-  }
-
-  def checkIf(tree: If, env: Res)(implicit ctx: Context): Res = {
-    val If(cond, thenp, elsep) = tree
-
-    apply(env, cond)
-    val env1 = apply(env.fresh, thenp)
-    val env2 = apply(env.fresh, elsep)
-
-    val res = env.fresh
-    res.setNonInit(env1.nonInit ++ env2.nonInit)
-    res.setLazyForced(env1.lazyForced ++ env2.lazyForced)
-    res.setPartialSyms(env1.partialSyms ++ env2.partialSyms)
-
-    res.effects = env.effects ++ env1.effects ++ env2.effects
-    res.partial = env1.partial || env2.partial
-    res.latentEffects = (env: Res) => env1.force(env.fresh) ++ env2.force(env.fresh)
+      res += Member(ref.symbol, tree, tree.pos)
 
     res
   }
 
-  def apply(env: Res, tree: Tree)(implicit ctx: Context) = tree match {
+  def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
+    val body = env.defn(sym)
+    debug("checking closure: " + body.show)
+    Res(
+      env = env,
+      latentEffects = (env: Env) => apply(env, body).effects,    // TODO: keep res
+      partial = false
+    )
+  }
+
+  def checkIf(tree: If, env: Env)(implicit ctx: Context): Res = {
+    val If(cond, thenp, elsep) = tree
+
+    val res1: Res = apply(env, cond)
+    val res2: Res = apply(res1.env.fresh, thenp)
+    val res3: Res = apply(res1.env.fresh, elsep)
+
+    val env4 = res3.env.fresh
+    env4.setNonInit(res2.env.nonInit ++ res3.env.nonInit)
+    env4.setLazyForced(res2.env.lazyForced ++ res3.env.lazyForced)
+    env4.setPartialSyms(res2.env.partialSyms ++ res3.env.partialSyms)
+
+    val res = Res(env = env4)
+    res.effects = res1.effects ++ res2.effects ++ res3.effects
+    res.partial = res1.partial || res1.partial
+    res.latentEffects = (env: Env) => res2.force(env) ++ res3.force(env)
+
+    res
+  }
+
+  def apply(env: Env, tree: Tree)(implicit ctx: Context): Res = tree match {
     case tmpl: Template =>
       val stats = tmpl.body.filter {
         case vdef : ValDef  =>
@@ -575,25 +586,25 @@ class DataFlowChecker extends tpd.TreeAccumulator[Res] {
       }
       apply(env, Block(stats, tpd.unitLiteral))
     case vdef : ValDef if !vdef.symbol.is(Lazy) =>
-      val env2 = apply(env, vdef.rhs)
+      val res1 = apply(env, vdef.rhs)
 
-      if (!tpd.isWildcardArg(vdef.rhs) && !vdef.rhs.isEmpty) env2.addInit(vdef.symbol)  // take `_` as uninitialized, otherwise it's initialized
+      if (!tpd.isWildcardArg(vdef.rhs) && !vdef.rhs.isEmpty) res1.env.addInit(vdef.symbol)  // take `_` as uninitialized, otherwise it's initialized
 
-      if (env2.partial) {
-        if (env2.initialized) // fully initialized
-          env2.markInitialized
+      if (res1.partial) {
+        if (res1.env.initialized) // fully initialized
+          res1.env.markInitialized
         else
-          env2.addPartial(vdef.symbol)
+          res1.env.addPartial(vdef.symbol)
       }
 
-      if (env2.isLatent)
-        env2.addLatent(vdef.symbol, env2.latentEffects)
+      if (res1.isLatent)
+        res1.env.addLatent(vdef.symbol, res1.latentEffects)
 
-      env2.latentEffects = null
+      res1.latentEffects = null
 
-      env2
+      res1
     case _: DefTree =>  // ignore other definitions
-      env
+      Res(env = env)
     case Closure(_, meth, _) =>
       checkClosure(meth.symbol, tree, env)
     case tree: Ident if tree.symbol.isTerm =>
@@ -605,42 +616,39 @@ class DataFlowChecker extends tpd.TreeAccumulator[Res] {
     case tree @ Select(prefix, _) if tree.symbol.isTerm =>
       checkSelect(tree, env)
     case tree @ This(_) =>
-      if (env.isPartial(tree.symbol) && !env.initialized) env.partial = true
-      env
+      if (env.isPartial(tree.symbol) && !env.initialized) Res(env = env, partial = true)
+      else Res(env = env)
     case tree @ Super(qual, mix) =>
-      if (env.isPartial(qual.symbol) && !env.initialized) env.partial = true
-      env
+      if (env.isPartial(qual.symbol) && !env.initialized) Res(env = env, partial = true)
+      else Res(env = env)
     case tree @ If(cond, thenp, elsep) =>
       checkIf(tree, env)
     case tree @ Apply(fun, args) =>
       checkApply(tree, fun, args, env)
     case tree @ Assign(lhs @ (Ident(_) | Select(This(_), _)), rhs) =>
-      apply(env, rhs)
+      val resRhs = apply(env, rhs)
 
-      if (!env.partial || env.isPartial(lhs.symbol) || env.isNotInit(lhs.symbol)) {
-        env.addInit(lhs.symbol)
-        if (!env.partial) env.removePartial(lhs.symbol)
-        else env.addPartial(lhs.symbol)
+      if (!resRhs.partial || env.isPartial(lhs.symbol) || env.isNotInit(lhs.symbol)) {
+        resRhs.env.addInit(lhs.symbol)
+        if (!resRhs.partial) resRhs.env.removePartial(lhs.symbol)
+        else resRhs.env.addPartial(lhs.symbol)
       }
-      else env += CrossAssign(lhs, rhs)
+      else resRhs += CrossAssign(lhs, rhs)
 
-      env.latentEffects = null
-      env.partial = false
+      resRhs.latentEffects = null
+      resRhs.partial = false
 
-      env
+      resRhs
     case tree @ Assign(lhs @ Select(prefix, _), rhs) =>
-      val env1 = apply(env.fresh, prefix)
-      val env2 = apply(env.fresh, rhs)
-      env.propagate(env1)
-      env.propagate(env2)
+      val resLhs = apply(env, prefix)
+      val resRhs = apply(resLhs.env, rhs)
 
-      if (env2.partial && !env1.partial)
-        env += CrossAssign(lhs, rhs)
+      val res = Res(env = resRhs.env, effects = resLhs.effects ++ resRhs.effects)
 
-      env.latentEffects = null
-      env.partial = false
+      if (resRhs.partial && !resLhs.partial)
+        res += CrossAssign(lhs, rhs)
 
-      env
+      res
     case tree @ Block(stats, expr) =>
       val meths = stats.collect {
         case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) =>
@@ -653,11 +661,18 @@ class DataFlowChecker extends tpd.TreeAccumulator[Res] {
       debug("local methods: " + meths.map(_._1))
 
       env.addDefs(meths)
-      val res = foldOver(env, tree)
-      env.removeDefs(meths.map(_._1))
 
-      res
+      val res = stats.foldLeft(Res(env = env)) { (acc, stat) =>
+        val res1 = apply(acc.env, stat)
+        acc.derived(env = res1.env, effects = acc.effects ++ res1.effects)
+      }
+
+      val res1 = apply(res.env, expr)
+
+      res1.env.removeDefs(meths.map(_._1))
+
+      res1
     case _ =>
-      foldOver(env, tree)
+      Res(env = env)
   }
 }
