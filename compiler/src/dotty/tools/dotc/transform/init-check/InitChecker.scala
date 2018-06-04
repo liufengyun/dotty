@@ -305,7 +305,7 @@ object DataFlowChecker {
     var latentEffects: LatentEffects = null
   ) {
 
-    def force(env: Env): Effects = latentEffects(env)
+    def force(env: Env): Effects = if (isLatent) latentEffects(env) else Vector.empty
     def isLatent = latentEffects != null
 
     def +=(eff: Effect): Unit = effects = effects :+ eff
@@ -394,7 +394,7 @@ class DataFlowChecker {
 
 
       if (res.isLatent) {
-        val effs2 = res.latentEffects.apply(env)                   // latent values are not partial
+        val effs2 = res.force(env)                   // latent values are not partial
         if (effs2.nonEmpty) {
           partial = true
           if (!isParamPartial(index)) effs = effs :+ Latent(arg, effs2)
@@ -442,7 +442,7 @@ class DataFlowChecker {
 
     // function apply: see TODO for LatentEffects
     if (res1.isLatent) {
-      val effs2 = res1.latentEffects.apply(res2.env)
+      val effs2 = res1.force(res2.env)
       if (effs2.nonEmpty) effs = effs :+ Latent(tree, effs2)
     }
 
