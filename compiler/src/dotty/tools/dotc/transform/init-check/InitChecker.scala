@@ -359,7 +359,7 @@ class DataFlowChecker {
           if (!isParamPartial(index)) effs = effs :+ Latent(arg, effs2.effects)
         }
       }
-      if (res.isPartial && !isParamPartial(index)) effs = effs :+ Argument(sym, arg)
+      if (res.isPartial && !isParamPartial(index) && force) effs = effs :+ Argument(sym, arg)
     }
 
     (Res(env = env, effects = effs, valueInfo = ValueInfo(partial = partial)), infos)
