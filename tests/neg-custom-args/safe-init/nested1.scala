@@ -1,12 +1,12 @@
 class X {
-  object A {
-    name.size
+  object A {                         // error
+    name.size                        // error
     def foo: Int = name.size
     def bar: Int = 10
   }
 
   A.foo                              // error
-  A.bar
+  A.bar                              // error: best effort
 
   val name = "jack"
 }
@@ -14,7 +14,7 @@ class X {
 
 class Y {
   class A {
-    name.size
+    name.size                        // error
     def foo: Int = name.size
     def bar: Int = 10
   }
