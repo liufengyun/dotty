@@ -147,6 +147,8 @@ object DataFlowChecker {
       case Latent(tree, effs)  =>
         effs.foreach(_.report)
         ctx.warning(s"Latent effects results in initialization errors", tree.pos)
+      case RecCreate(cls, tree)  =>
+        ctx.warning(s"Possible recursive creation of instance for ${cls.show}", tree.pos)
     }
   }
   case class Uninit(sym: Symbol, pos: Position) extends Effect                         // usage of uninitialized values
@@ -160,6 +162,7 @@ object DataFlowChecker {
   case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Effect // create new instance of in-scope inner class results in error
   case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
   case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
+  case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
 
   object NewEx {
     def extract(tp: Type)(implicit ctx: Context): TypeRef = tp.dealias match {
@@ -197,7 +200,6 @@ object DataFlowChecker {
     protected var _lazyForced: Set[Symbol] = Set()
     protected var _latentSyms: Map[Symbol, LatentInfo] = Map()
     protected var _cls: ClassSymbol = null
-    protected var _methChecking: Set[Symbol] = Set()
 
     def fresh: FreshEnv = this.clone.asInstanceOf[FreshEnv]
 
@@ -220,15 +222,6 @@ object DataFlowChecker {
     def addInit(sym: Symbol)      = _nonInit -= sym
     def nonInit: Set[Symbol]      = _nonInit
 
-    def isChecking(sym: Symbol)   = _methChecking.contains(sym)
-    def addChecking(sym: Symbol)  = _methChecking += sym
-    def removeChecking(sym: Symbol) = _methChecking -= sym
-    def checking[T](sym: Symbol)(fn: => T) = {
-      addChecking(sym)
-      val res = fn
-      removeChecking(sym)
-      res
-    }
 
     def initialized: Boolean      = _nonInit.isEmpty && _partialSyms.size == 1
     def markInitialized           = {
@@ -371,7 +364,11 @@ class DataFlowChecker {
 
     val (res1, _) = checkParams(tref.symbol, paramInfos, args, env, force = true)
 
-    if (!isPartial(tref.prefix, env) || isSafeParentAccess(tref, res1.env)) return res1
+    if (tref.symbol == env.currentClass) {
+      res1 += RecCreate(tref.symbol, tree)
+      return res1
+    }
+    else if (!isPartial(tref.prefix, env) || isSafeParentAccess(tref, res1.env)) return res1
 
     if (!isLexicalRef(tref, res1.env)) {
       res1 += PartialNew(tref.prefix, tref.symbol, tree.pos)
@@ -575,6 +572,16 @@ class DataFlowChecker {
     res1.derived(effects = res.effects ++ res1.effects)
   }
 
+  // TODO: method call should compute fix point
+  protected var _methChecking: Set[Symbol] = Set()
+  def isChecking(sym: Symbol)   = _methChecking.contains(sym)
+  def checking[T](sym: Symbol)(fn: => T) = {
+    _methChecking += sym
+    val res = fn
+    _methChecking -= sym
+    res
+  }
+
   def indexLatents(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) =>
       // TODO: multiple calls & capturing of params, split Env to context-sensitive & context-insensitive
@@ -583,8 +590,8 @@ class DataFlowChecker {
         case init :+ last => (init, last)
       }
       val zero = LatentInfo { (env, valInfoFn) =>
-        if (env.isChecking(ddef.symbol)) {
-          debug(s"recursive call found during initialization of ${ddef.symbol}")
+        if (isChecking(ddef.symbol)) {
+          debug(s"recursive call of ${ddef.symbol} found during initialization of ${env.currentClass}")
           Res(env)
         }
         else {
@@ -595,7 +602,7 @@ class DataFlowChecker {
               if (paramInfo.partial) env.addPartial(param.symbol)
             }
           }
-          env.checking(ddef.symbol) { apply(env, ddef.rhs)(ctx.withOwner(ddef.symbol)) }
+          checking(ddef.symbol) { apply(env, ddef.rhs)(ctx.withOwner(ddef.symbol)) }
         }
       }
 
@@ -613,22 +620,22 @@ class DataFlowChecker {
       env.addLatent(ddef.symbol, latentInfo)
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
       val latent = LatentInfo { (env, valInfoFn) =>
-        if (env.isChecking(vdef.symbol)) {
-          debug(s"recursive call found during initialization of ${vdef.symbol}")
+        if (isChecking(vdef.symbol)) {
+          debug(s"recursive forcing of lazy ${vdef.symbol} found during initialization of ${env.currentClass}")
           Res(env)
         }
-        else env.checking(vdef.symbol) {
+        else checking(vdef.symbol) {
           apply(env, vdef.rhs)
         }
       }
       env.addLatent(vdef.symbol, latent)
     case tdef: TypeDef if tdef.isClassDef  =>
       val latent = LatentInfo { (env, valInfoFn) =>
-        if (env.isChecking(tdef.symbol)) {
-          debug(s"recursive call found during initialization of ${tdef.symbol}")
-          Res(env)
+        if (isChecking(tdef.symbol)) {
+          debug(s"recursive creation of ${tdef.symbol} found during initialization of ${env.currentClass}")
+          Res(env = env)
         }
-        else env.checking(tdef.symbol) {
+        else checking(tdef.symbol) {
           apply(env, tdef.rhs)(ctx.withOwner(tdef.symbol))
         }
       }
