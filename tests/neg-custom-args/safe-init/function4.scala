@@ -10,4 +10,7 @@ final class Foo {
   f1()        // error
 
   val name = "hello"
+
+  f1()        // ok
+  f2()        // ok
 }

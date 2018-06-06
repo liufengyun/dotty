@@ -14,4 +14,6 @@ final class Foo {
   val f2 = getName2(a2)(b2)
 
   val name = "hello"
+
+  f1()                                  // ok, inited
 }
