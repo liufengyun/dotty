@@ -5,12 +5,14 @@ import core._
 import MegaPhase._
 import Contexts.Context
 import StdNames._
+import Names._
 import Phases._
 import ast._
 import Trees._
 import Flags._
 import SymUtils._
 import Symbols._
+import Denotations._
 import SymDenotations._
 import Types._
 import Decorators._
@@ -152,14 +154,57 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
   override def transformTemplate(tree: Template)(implicit ctx: Context): Tree = {
     val cls = ctx.owner.asClass
+    val self = cls.thisType
 
     if (cls.hasAnnotation(defn.UncheckedAnnot)) return tree
+
+    def lateInitMsg(sym: Symbol) =
+      s"""|Initialization too late: $sym may be used during parent initialization.
+          |Consider make it a class parameter."""
+        .stripMargin
 
     for (decl <- cls.info.decls.toList if decl.is(AnyFlags, butNot = Method | Deferred)) {
       val overrideInit = decl.allOverriddenSymbols.exists(_.hasAnnotation(defn.InitAnnot))
       if (overrideInit && !decl.is(ParamAccessor | Override))
-        ctx.warning(s"$decl may be used during parent initialization. Consider make it a class parameter.", decl.pos)
+        ctx.warning(lateInitMsg(decl), decl.pos)
     }
+
+    var membersToCheck: util.SimpleIdentityMap[Name, Type] = util.SimpleIdentityMap.Empty[Name]
+    val seenClasses = new util.HashSet[Symbol](256)
+
+    def parents(cls: Symbol) =
+      cls.info.parents.map(_.classSymbol)
+        .filter(_.is(AbstractOrTrait))
+        .dropWhile(_.is(JavaDefined | Scala2x))
+
+    def addDecls(cls: Symbol): Unit =
+      if (!seenClasses.contains(cls)) {
+        seenClasses.addEntry(cls)
+        for (mbr <- cls.info.decls)
+          if (mbr.isTerm && mbr.is(Deferred | Method) && mbr.hasAnnotation(defn.InitAnnot) &&
+              !membersToCheck.contains(mbr.name))
+            membersToCheck = membersToCheck.updated(mbr.name, mbr.info.asSeenFrom(self, mbr.owner))
+          parents(cls).foreach(addDecls)
+      }
+    parents(cls).foreach(addDecls)  // no need to check methods defined in current class
+
+    def invalidImplementMsg(sym: Symbol) =
+      s"""|@scala.annotation.init required for ${sym.show} in ${sym.owner.show}
+          |Because the abstract method it implements is marked as `@init`."""
+        .stripMargin
+
+    for (name <- membersToCheck.keys) {
+      val tp  = membersToCheck(name)
+      for {
+        mbrd <- self.member(name).alternatives
+        if mbrd.info.overrides(tp, matchLoosely = true)
+      } {
+        val mbr = mbrd.symbol
+        if (mbr.owner.ne(cls) && !mbr.hasAnnotation(defn.InitAnnot))
+          ctx.warning(invalidImplementMsg(mbr), cls.pos)
+      }
+    }
+
 
     val env = classEnv(cls)
     val checker = new DataFlowChecker

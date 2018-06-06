@@ -12,14 +12,16 @@ trait Bar {
   val m = "hello"
 
   def foo(n: Int) =  m
+
+  def foo(x: String) = "hello, " + x
 }
 
-class Qux extends Foo with Bar  // error: Bar.foo needs to be annotated with
+class Qux extends Foo with Bar  // error: Bar.foo needs to be annotated with `@init`
 
-trait Yun {           //  `C extends Yun with Foo` will create problem
+trait Yun {
   val m = "hello"
 
-  @init def foo(n: Int) =  m    // error: concrete trait methods may not be @init
+  @init def foo(n: Int) =  m    // error: m may not be initialized when foo is called virtually
 }
 
 
