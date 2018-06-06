@@ -25,3 +25,17 @@ object Test {
     new Bar("Jack")
   }
 }
+
+trait Dao(val name: String) extends Foo {
+  val title = "Mr."
+
+  @init
+  def getName = name          // error: cannot access `name`
+}
+
+trait Zen(val name: String) {
+  val title = "Mr."
+
+  @init
+  def getName = name          // error: cannot access `name`
+}

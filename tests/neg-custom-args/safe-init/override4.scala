@@ -1,7 +1,7 @@
 import scala.annotation.init
 import scala.collection.mutable
 
-trait Foo {
+class Foo {
   val map: mutable.Map[Int, String] = mutable.Map.empty
 
   @init
@@ -16,21 +16,21 @@ class Bar extends Foo {
 class Bar2 extends Bar {
   val mymap: mutable.Map[Int, String] = mutable.Map.empty
 
-  def enter(k: Int, v: String) = {
-    mymap(k) = v
+  override def enter(k: Int, v: String) = {
+    mymap(k) = v                   // error
   }
 }
 
-trait Foo1 {
+class Foo1 {
   val map: mutable.Map[Int, String] = mutable.Map.empty
 
   @init
-  def enter(k: Int, v: String) = map(k) = v  // error: init methods need to be final
+  def enter(k: Int, v: String) = map(k) = v
 }
 
 
-trait Foo2 {
-  def map: mutable.Map[Int, String]
+abstract class Foo2 {
+  def map: mutable.Map[Int, String]          // error
 
   @init
   def enter(k: Int, v: String) = map(k) = v  // error: init methods cannot access `map`
