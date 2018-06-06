@@ -46,10 +46,11 @@ import DataFlowChecker._
  *   - `val x = rhs` where the right-hand-side is partial
  *
  *  TODO:
- *   - default arguments of partial/init methods
+ *   - check init methods
+ *   - check init class
+ *   - check default arguments of init methods
  *   - selection on ParamAccessors of partial value is fine if the param is not partial
  *   - handle tailrec calls during initialization (which captures `this`)
- *
  */
 class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   import tpd._
@@ -435,10 +436,11 @@ class DataFlowChecker {
     }
   }
 
-  def checkApply(tree: tpd.Tree, fun: Tree, args: List[Tree], env: Env)(implicit ctx: Context): Res = {
+  def checkApply(tree: tpd.Tree, fun: Tree, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val res1 = apply(env, fun)
 
-    val paramInfos = fun.tpe.widen.asInstanceOf[MethodType].paramInfos
+    val args = argss.flatten
+    val paramInfos = fun.tpe.widen.paramInfoss.flatten
     val (res2, valueInfos) = checkParams(fun.symbol, paramInfos, args, env, force = !res1.isLatent)
 
     var effs = res1.effects ++ res2.effects
@@ -642,19 +644,14 @@ class DataFlowChecker {
 
   def indexLatents(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) =>
-      val (init: List[List[ValDef]], last: List[ValDef]) = ddef.vparamss match {
-        case Nil => (Nil, Nil)
-        case init :+ last => (init, last)
-      }
-
-      val zero = LatentInfo { valInfoFn =>
+      val latenInfo = LatentInfo { valInfoFn =>
         if (isChecking(ddef.symbol)) {
           debug(s"recursive call of ${ddef.symbol} found during initialization of ${env.currentClass}")
           Res()
         }
         else {
           val env2 = env.fresh
-          last.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+          ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
             val paramInfo = valInfoFn(index)
             env2.addLocal(param.symbol)
             if (paramInfo.isLatent) env2.addLatent(param.symbol, paramInfo.latentInfo)
@@ -665,24 +662,8 @@ class DataFlowChecker {
         }
       }
 
-      // TODO: handle multiple block
-      //
-      // val latentInfo = init.foldRight(zero) { (params, latentInfo) =>
-      //   LatentInfo { valInfoFn =>
-      //     if (sharedEnv == null) sharedEnv = env.fresh
-
-      //     params.zipWithIndex.foreach { case (param, index) =>
-      //       val paramInfo = valInfoFn(index)
-      //       sharedEnv.addLocal(param.symbol)
-      //       if (paramInfo.isLatent) sharedEnv.addLatent(param.symbol, paramInfo.latentInfo)
-      //       if (paramInfo.partial) sharedEnv.addPartial(param.symbol)
-      //     }
-
-      //     Res(valueInfo = ValueInfo(latentInfo = latentInfo))
-      //   }
-      // }
       env.addLocal(ddef.symbol)
-      env.addLatent(ddef.symbol, zero)
+      env.addLatent(ddef.symbol, latenInfo)
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
       val latent = LatentInfo { valInfoFn =>
         if (isChecking(vdef.symbol)) {
@@ -746,8 +727,9 @@ class DataFlowChecker {
       else Res()
     case tree @ If(cond, thenp, elsep) =>
       checkIf(tree, env)
-    case tree @ Apply(fun, args) =>
-      checkApply(tree, fun, args, env)
+    case tree @ Apply(_, _) =>
+      val (fn, targs, vargss) = decomposeCall(tree)
+      checkApply(tree, fn, vargss, env)
     case tree @ Assign(lhs @ (Ident(_) | Select(This(_), _)), rhs) =>
       val resRhs = apply(env, rhs)
 
