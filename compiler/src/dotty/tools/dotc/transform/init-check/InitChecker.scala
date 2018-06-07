@@ -471,7 +471,7 @@ class DataFlowChecker {
 
   def indentedDebug(msg: String) = debug(pad(msg, padFirst = true))
 
-  def checkForce(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res =
+  def checkForce(sym: Symbol, pos: Position, env: Env)(implicit ctx: Context): Res =
     if (sym.is(Lazy) && !env.isForced(sym)) {
       env.addForced(sym)
       val res = env.latentInfo(sym)(i => null)
@@ -479,7 +479,7 @@ class DataFlowChecker {
       if (res.isPartial) env.addPartial(sym)
       if (res.isLatent) env.addLatent(sym, res.valueInfo.latentInfo)
 
-      if (res.effects.nonEmpty) res.copy(effects = Vector(Force(sym, res.effects, tree.pos)))
+      if (res.effects.nonEmpty) res.copy(effects = Vector(Force(sym, res.effects, pos)))
       else res
     }
     else {
@@ -526,17 +526,20 @@ class DataFlowChecker {
       res1 += RecCreate(tref.symbol, tree)
       return res1
     }
-    else if (!isPartial(tref.prefix, env) || isSafeVirtualAccess(tref, env)) return res1
+
+    if (!(localRef(tref, env).exists)) return res1
 
     if (!isLexicalRef(tref, env)) {
-      res1 += PartialNew(tref.prefix, tref.symbol, tree.pos)
+      if (isPartial(tref.prefix, env) && !isSafeVirtualAccess(tref, env))
+        res1 += PartialNew(tref.prefix, tref.symbol, tree.pos)
       res1
     }
     else {
       val latentInfo = env.latentInfo(tref.symbol)
-      val res2 = latentInfo(i => null)                // TODO: propagate params to init
+      val res2 = latentInfo(i => null)                  // TODO: propagate params to init
       if (res2.effects.nonEmpty) res1 += Instantiate(tref.symbol, res2.effects, tree.pos)
-      res1.copy(valueInfo = ValueInfo(partial = true))
+      val info = ValueInfo(partial = !tref.symbol.is(allOf(Synthetic, Module)))  // TODO: safe nested class instantiation?
+      res1.copy(valueInfo = info)
     }
   }
 
@@ -559,6 +562,8 @@ class DataFlowChecker {
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
+    if (tree.qualifier.tpe <:< env.currentClass.thisType) return checkTermRef(tree, env)
+
     val res = apply(tree.qualifier, env)
 
     if (res.isPartial)
@@ -576,15 +581,17 @@ class DataFlowChecker {
    *   - select on self: `self.x` (TODO)
    */
   def localRef(tp: Type, env: Env)(implicit ctx: Context): Type = tp match {
-    case TermRef(ThisType(tref), _) if tref.symbol.isContainedIn(env.currentClass) => tp
-    case TermRef(SuperType(ThisType(tref), _), _) if tref.symbol.isContainedIn(env.currentClass) => tp
-    case ref @ TermRef(NoPrefix, _) if ref.symbol.isContainedIn(env.currentClass) => ref
-    case TermRef(tp: TermRef, _) => localRef(tp, env)
+    case NamedTypeEx(ThisType(tref), _) if tref.symbol.isContainedIn(env.currentClass) => tp
+    case NamedTypeEx(SuperType(ThisType(tref), _), _) if tref.symbol.isContainedIn(env.currentClass) => tp
+    case ref @ NamedTypeEx(NoPrefix, _) if ref.symbol.isContainedIn(env.currentClass) => ref
+    case ref @ NamedTypeEx(tp: TermRef, _) =>
+      if (tp <:< env.currentClass.thisType) ref    // tp is alias of `this`
+      else localRef(tp, env)
     case _ => NoType
   }
 
   object NamedTypeEx {
-    def unapply(tp: Type)(implicit ctx: Context): Option[(Type, Symbol)] = tp match {
+    def unapply(tp: NamedType)(implicit ctx: Context): Option[(Type, Symbol)] = tp match {
       case ref: TermRef => Some(ref.prefix -> ref.symbol)
       case ref: TypeRef => Some(ref.prefix -> ref.symbol)
       case _ => None
@@ -620,8 +627,48 @@ class DataFlowChecker {
     case _                          => false
   }
 
+  def checkLexicalLocalRef(sym: Symbol, env: Env, pos: Position)(implicit ctx: Context): Res = {
+    var effs = Vector.empty[Effect]
+
+    if (env.isNotInit(sym)) effs = effs :+ Uninit(sym, pos)
+
+    if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
+      effs = effs :+ UseAbstractDef(sym, pos)
+
+    if (sym.is(Lazy)) {                // a forced lazy val could be partial and latent
+      val res2 = checkForce(sym, pos, env)
+      return res2.copy(effects = effs ++ res2.effects)
+    }
+    else if (sym.is(Method)) {
+      if (!(sym.hasAnnotation(defn.InitAnnot) || sym.isEffectivelyFinal || isDefaultGetter(sym)))
+        effs = effs :+ OverrideRisk(sym, pos)
+
+      if (sym.info.isInstanceOf[ExprType] && env.isLatent(sym)) {       // parameter-less call
+        val latentInfo = env.latentInfo(sym)
+        val res2 = latentInfo(i => null)
+
+        return {
+          if (res2.effects.nonEmpty) res2.copy(effects = Vector(Call(sym, effs ++ res2.effects, pos)))
+          else res2.copy(effects = effs)
+        }
+      }
+      else {
+        val info = if (env.isLatent(sym)) ValueInfo(latentInfo = env.latentInfo(sym)) else ValueInfo()
+        return Res(effects = effs, valueInfo = info)
+      }
+    } else
+      Res(
+        effects = effs,
+        valueInfo = ValueInfo(
+          partial = env.isPartial(sym),
+          latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
+        )
+      )
+  }
+
   def checkTermRef(tree: Tree, env: Env)(implicit ctx: Context): Res = {
-    indentedDebug(s"is ${tree.show} local ? = " + localRef(tree.tpe, env).exists)
+    indentedDebug(s"${tree.show} is local ? = " + localRef(tree.tpe, env).exists)
+
     val ref: TermRef = localRef(tree.tpe, env) match {
       case NoType         => return Res()
       case tmref: TermRef => tmref
@@ -629,48 +676,20 @@ class DataFlowChecker {
 
     val sym = ref.symbol
 
-    var effs = Vector.empty[Effect]
+    if (isLexicalRef(ref, env)) checkLexicalLocalRef(sym, env, tree.pos)
+    else {
+      var effs = Vector.empty[Effect]
+      if (isPartial(ref.prefix, env) && !isSafeVirtualAccess(ref, env))
+        effs =  effs :+ Member(sym, tree, tree.pos)
 
-    if (isLexicalRef(ref, env)) {
-      if (env.isNotInit(sym)) effs = effs :+ Uninit(sym, tree.pos)
-
-      if (sym.is(Lazy)) {                // a forced lazy val could be partial and latent
-        val res2 = checkForce(sym, tree, env)
-        return res2.copy(effects = effs ++ res2.effects)
-      }
-      else if (sym.is(Method)) {
-        if (!(sym.hasAnnotation(defn.InitAnnot) || sym.isEffectivelyFinal || isDefaultGetter(sym)))
-          effs = effs :+ OverrideRisk(sym, tree.pos)
-
-        if (sym.info.isInstanceOf[ExprType] && env.isLatent(sym)) {       // parameter-less call
-          val latentInfo = env.latentInfo(sym)
-          val res2 = latentInfo(i => null)
-
-          return {
-            if (res2.effects.nonEmpty) res2.copy(effects = Vector(Call(sym, effs ++ res2.effects, tree.pos)))
-            else res2.copy(effects = effs)
-          }
-        }
-        else {
-          val info = if (env.isLatent(sym)) ValueInfo(latentInfo = env.latentInfo(sym)) else ValueInfo()
-          return Res(effects = effs, valueInfo = info)
-        }
-      }
-      else if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot) && sym.owner == env.currentClass) {
-        effs = effs :+ UseAbstractDef(sym, tree.pos)
-      }
-    }
-    else if (isPartial(ref.prefix, env) && !isSafeVirtualAccess(ref, env)) {
-      effs = effs :+ Member(sym, tree, tree.pos)
-    }
-
-    Res(
-      effects = effs,
-      valueInfo = ValueInfo(
-        partial = env.isPartial(sym),
-        latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
+      Res(
+        effects = effs,
+        valueInfo = ValueInfo(
+          partial = env.isPartial(sym),
+          latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
+        )
       )
-    )
+    }
   }
 
   def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
