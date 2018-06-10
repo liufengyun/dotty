@@ -56,6 +56,8 @@ import DataFlowChecker._
  *   - access latent parent field is unsafe, e.g. closure that close over dynamic dispatch methods
  *   - allow @partial annotation for init methods
  *   - args to overridable init methods match partiality & no latent effects
+ *   - @init class can only be extended by @init class
+ *   - parents of @init class should be @init or prefix not begin with `this`
  */
 class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   import tpd._
@@ -73,7 +75,7 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   def isField(sym: Symbol)(implicit ctx: Context) =
     sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
 
-  def classEnv(cls: ClassSymbol)(implicit ctx: Context) = {
+  def setupClassEnv(env: FreshEnv, cls: ClassSymbol)(implicit ctx: Context) = {
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
     var noninit = Set[Symbol]()    // definitions that are not initialized
@@ -89,18 +91,15 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       if isConcreteField(decl) && isPartial(decl)
     )
     partial += decl
-
-    // add current this
-    partial += cls
 
     // non-initialized fields of current class
     for (decl <- cls.info.decls.toList if isNonParamField(decl))
     noninit += decl
 
-    (new TopEnv(cls)).fresh.setNonInit(noninit).setPartialSyms(partial).setLocals(noninit ++ partial)
+    env.setNonInit(noninit).setPartialSyms(partial).setLocals(noninit ++ partial)
   }
 
-  def methodEnv(cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
+  def setupMethodEnv(env: FreshEnv, cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
     var noninit = Set[Symbol]()    // definitions that are not initialized
@@ -116,9 +115,6 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       if isConcreteField(decl) && isPartial(decl)
     )
     partial += decl
-
-    // add current this
-    partial += cls
 
     // non-initialized fields of current class
     if (cls.is(Trait))
@@ -128,23 +124,28 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       for (decl <- cls.info.decls.toList if isNonParamField(decl))
       noninit += decl
 
-    val env = (new TopEnv(cls)).fresh
     env.setNonInit(noninit)
     env.setPartialSyms(partial)
     env.setLocals(noninit ++ partial)
-    env
   }
 
   override def transformDefDef(ddef: tpd.DefDef)(implicit ctx: Context): tpd.Tree = {
     val sym = ddef.symbol
-    // println(s"checking $sym of ${sym.owner}")
     val overrideInit = sym.allOverriddenSymbols.exists(_.hasAnnotation(defn.InitAnnot))
 
     if (overrideInit ||sym.hasAnnotation(defn.InitAnnot)) {
-      val env = methodEnv(sym.owner.asClass, sym, isOverriding = overrideInit)
+      val cls = sym.owner.asClass
+      val heap = new RootHeap(cls)
+
+      val classEnv = setupMethodEnv(heap.newEnv(heap.rootEnv.id), sym.owner.asClass, sym, isOverriding = overrideInit)
+      val thisInfo = new ObjectEnv(classEnv.id)
+
+      heap.rootEnv.setPartialSyms(Set(cls))
+      heap.rootEnv.setLatentSyms(Map(cls -> thisInfo))
+
       val checker = new DataFlowChecker
 
-      val res = checker.apply(ddef.rhs, env)
+      val res = checker.apply(ddef.rhs, classEnv)
       res.effects.foreach(_.report)
       if (res.effects.nonEmpty) ctx.warning(s"init $sym may cause initialization problems", ddef.pos)
     }
@@ -205,14 +206,21 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       }
     }
 
-
-    val env = classEnv(cls)
     val checker = new DataFlowChecker
-    checker.indexLatents(tree.body, env)
 
-    val res = checker.checkStats(tree.body, env)
+    // current class env needs special setup
+    val heap = new RootHeap(cls)
+
+    val classEnv = setupClassEnv(heap.newEnv(heap.rootEnv.id), cls)
+    checker.indexStats(tree.body, classEnv)
+    val thisInfo = new ObjectEnv(classEnv.id)
+
+    heap.rootEnv.setPartialSyms(Set(cls))
+    heap.rootEnv.setLatentSyms(Map(cls -> thisInfo))
+
+    val res = checker.checkStats(tree.body, classEnv)
     res.effects.foreach(_.report)
-    env.nonInit.foreach { sym =>
+    classEnv.nonInit.foreach { sym =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 
@@ -269,30 +277,117 @@ object DataFlowChecker {
   case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
 
   type Effects = Vector[Effect]
-  case class LatentInfo(fun: (Int => ValueInfo) => Res) extends ((Int => ValueInfo) => Res) {
-    def apply(valInfoFn: Int => ValueInfo): Res = fun(valInfoFn)
+  sealed trait LatentInfo {
+    def asMethod: MethodInfo = this.asInstanceOf[MethodInfo]
+    def asObject: ObjectInfo = this.asInstanceOf[ObjectInfo]
+    def isMethod: Boolean = this.isInstanceOf[MethodInfo]
+    def isObject: Boolean = !isMethod
+  }
+
+  case class MethodInfo(fun: (Int => ValueInfo, Heap) => Res) extends LatentInfo {
+    def apply(valInfoFn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = fun(valInfoFn, heap)
+  }
+
+  case class ObjectInfo(fun: (tpd.Tree, Symbol, Heap) => Res) extends LatentInfo {
+    def select(tree: tpd.Tree, sym: Symbol, heap: Heap)(implicit ctx: Context): Res = fun(tree, sym, heap)
+  }
+
+  class ObjectEnv(val id: Int) extends ObjectInfo(null) {
+    override def select(tree: tpd.Tree, sym: Symbol, heap: Heap)(implicit ctx: Context): Res = {
+      val env = heap(id)
+      // TODO: use the same checker
+      val checker = new DataFlowChecker
+      val latent = if (env.isLatent(sym)) env.latentInfo(sym) else null
+      checker.checkTermRef(tree, env).copy(latentInfo = latent)
+    }
+
+    override def toString: String = s"ObjectEnv($id)"
   }
 
   case class ValueInfo(partial: Boolean = false, latentInfo: LatentInfo = null) {
     def isLatent = latentInfo != null
   }
 
-  class Env(private var outer: Env) extends Cloneable {
+  class Heap(_cls: ClassSymbol) extends Cloneable {
+    private var _parent: Heap = null
+    protected var _envMap: Map[Int, Env] = Map()
+
+    def apply(id: Int) =_envMap(id)
+
+    def contains(id: Int) = _envMap.contains(id)
+
+    def currentClass: ClassSymbol = _cls
+
+    def newEnv(parentId: Int): FreshEnv = {
+      val env = new FreshEnv(Heap.newId, parentId)
+      env.heap = this
+      _envMap += env.id -> env
+      env
+    }
+
+    override def clone: Heap = {
+      val heap = new Heap(this.currentClass)
+      heap._parent = this
+
+      this._envMap.foreach { case (id, env) =>
+        val env2 = env.clone
+        env2.heap = heap
+        heap._envMap = heap._envMap.updated(id, env2)
+      }
+
+      heap
+    }
+
+    def join(heap2: Heap): Heap = {
+      assert(heap2._parent `eq` this)
+      heap2._envMap.foreach { case (id: Int, env: Env) =>
+        if (this.contains(id))
+          this._envMap = this._envMap.updated(id, this(id).join(env))
+        else {
+          env.heap = this
+          this._envMap = this._envMap.updated(id, env)
+        }
+      }
+      this
+    }
+  }
+
+  object Heap {
+    private var uniqueId = 0
+    def newId: Int = {
+      uniqueId += 1
+      uniqueId
+    }
+  }
+
+  class RootHeap(_cls: ClassSymbol) extends Heap(_cls) {
+    val rootEnv = {
+      val env = new RootEnv(Heap.newId, -1)
+      env.heap = this
+      _envMap += env.id -> env
+      env
+    }
+  }
+
+  class Env(val id: Int, val outerId: Int) extends Cloneable {
+    var heap: Heap = null
+
     protected var _locals: Set[Symbol] = Set()
     protected var _nonInit: Set[Symbol] = Set()
     protected var _partialSyms: Set[Symbol] = Set()
     protected var _lazyForced: Set[Symbol] = Set()
     protected var _latentSyms: Map[Symbol, LatentInfo] = Map()
 
-    def fresh: FreshEnv = new FreshEnv(this)
+    def outer: Env = heap(outerId)
+
+    def currentClass: ClassSymbol = heap.currentClass
+
+    override def clone: Env = super.clone.asInstanceOf[Env]
 
     def deepClone: Env = {
-      val env = this.clone.asInstanceOf[Env]
-      env.outer = outer.deepClone
-      env
+      val heap2 = heap.clone
+      heap2(this.id)
     }
-
-    def currentClass: ClassSymbol = outer.currentClass
 
     def addLocal(sym: Symbol) = _locals += sym
 
@@ -334,21 +429,20 @@ object DataFlowChecker {
       _nonInit ++= env2.nonInit
       _lazyForced ++= env2._lazyForced
       _partialSyms ++= env2._partialSyms
-      outer.join(env2.outer)
+      // TODO: join latent info
+      this
     }
 
-    def initialized: Boolean =
-      _nonInit.isEmpty &&
-        (_partialSyms.isEmpty || _partialSyms == Set(currentClass)) &&
-        outer.initialized
-    def markInitialized: Unit = {
-      assert(initialized)
-      _partialSyms = Set()
-      outer.markInitialized
+    def thisInitialized: Boolean = {
+      val objEnv = this.latentInfo(this.currentClass).asInstanceOf[ObjectEnv]
+      this.heap(objEnv.id).initialized
     }
+
+    private def initialized: Boolean =
+      _nonInit.isEmpty && _partialSyms.isEmpty
 
     override def toString: String =
-      (if (outer != null) outer.toString + "\n" else "") ++
+      (if (outerId > 0) outer.toString + "\n" else "") ++
       s"""~ ------------ $currentClass -------------
           ~ | locals:  ${_locals}
           ~ | not initialized:  ${_nonInit}
@@ -358,22 +452,22 @@ object DataFlowChecker {
       .stripMargin('~')
   }
 
-  class TopEnv(_cls: ClassSymbol) extends Env(null) {
-    override def currentClass = _cls
+  class FreshEnv(override val id: Int, outerId: Int) extends Env(id, outerId) {
+    def setPartialSyms(partialSyms: Set[Symbol]): this.type = { this._partialSyms = partialSyms; this }
+    def setNonInit(nonInit: Set[Symbol]): this.type = { this._nonInit = nonInit; this }
+    def setLazyForced(lazyForced: Set[Symbol]): this.type = { this._lazyForced = lazyForced; this }
+    def setLocals(locals: Set[Symbol]): this.type = { this._locals = locals; this }
+    def setLatentSyms(_latentSyms: Map[Symbol, LatentInfo]): this.type = { this._latentSyms = _latentSyms; this }
+  }
 
-    override def deepClone: Env = this
-    override def join(env2: Env) = {
-      assert(this `eq` env2)
-      this
-    }
-
-    override def isPartial(sym: Symbol)    = false
-    override def addPartial(sym: Symbol)   = throw new Exception(s"add partial ${sym} to top env")
-    override def removePartial(sym: Symbol)= throw new Exception(s"remove partial ${sym} from top env")
+  class RootEnv(override val id: Int, outerId: Int) extends FreshEnv(id, outerId) {
+    override def isPartial(sym: Symbol)    = _partialSyms.contains(sym)
+    override def addPartial(sym: Symbol)   = throw new Exception(s"add partial ${sym} to root env")
+    override def removePartial(sym: Symbol)= throw new Exception(s"remove partial ${sym} from root env")
 
     override def isLatent(sym: Symbol)     = false
-    override def addLatent(sym: Symbol, effs: LatentInfo) = throw new Exception(s"add latent ${sym} to top env")
-    override def latentInfo(sym: Symbol): LatentInfo = throw new Exception(s"$sym is not latent")
+    override def addLatent(sym: Symbol, effs: LatentInfo) = throw new Exception(s"add latent ${sym} to root env")
+    override def latentInfo(sym: Symbol): LatentInfo = _latentSyms(sym)
 
     override def isForced(sym: Symbol)     = false
     override def addForced(sym: Symbol)    = throw new Exception(s"add forced ${sym} to top env")
@@ -381,45 +475,73 @@ object DataFlowChecker {
     override def isNotInit(sym: Symbol)    = false
     override def addInit(sym: Symbol)      = throw new Exception(s"add init ${sym} to top env")
 
-    override def initialized: Boolean      = true
-    override def markInitialized           = ()
+    def initialized: Boolean      = throw new Exception("only object support initialized")
   }
 
-  class FreshEnv(outer: Env) extends Env(outer) {
-    def setPartialSyms(partialSyms: Set[Symbol]): this.type = { this._partialSyms = partialSyms; this }
-    def setNonInit(nonInit: Set[Symbol]): this.type = { this._nonInit = nonInit; this }
-    def setLazyForced(lazyForced: Set[Symbol]): this.type = { this._lazyForced = lazyForced; this }
-    def setLocals(locals: Set[Symbol]): this.type = { this._locals = locals; this }
-  }
-
-  case class Res(var effects: Effects = Vector.empty, var valueInfo: ValueInfo = ValueInfo()) {
-    def force(valInfofn: Int => ValueInfo): Res = if (isLatent) valueInfo.latentInfo(valInfofn) else Res()
-    def isLatent  = valueInfo.isLatent
-    def isPartial = valueInfo.partial
+  case class Res(var effects: Effects = Vector.empty, var partial: Boolean = false, var latentInfo: LatentInfo = null) {
+    def isLatent  = latentInfo != null
+    def isPartial = partial
+    def isMethod  = isLatent && latentInfo.isInstanceOf[MethodInfo]
 
     def +=(eff: Effect): Unit = effects = effects :+ eff
     def ++=(effs: Effects) = effects ++= effs
 
-    def join(res2: Res): Res =
+    def force(valInfofn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = {
+      latentInfo.asMethod.apply(valInfofn, heap)
+    }
+
+    def select(tree: tpd.Tree, sym: Symbol, heap: Heap)(implicit ctx: Context): Res = {
+      if (isLatent) latentInfo.asObject.select(tree, sym, heap)
+      else Res()
+    }
+
+    def join(res2: Res)(implicit ctx: Context): Res =
+      if (!isLatent) {
+        res2 ++= this.effects
+        res2.partial = res2.partial || this.partial
+        res2
+      }
+      else if (!res2.isLatent) {
+        this ++= res2.effects
+        this.partial = res2.partial || this.partial
+        this
+      }
+      else if (isMethod) joinMethodRes(res2)
+      else joinObjectRes(res2)
+
+    private def joinMethodRes(res2: Res)(implicit ctx: Context): Res = {
       Res(
         effects = res2.effects ++ this.effects,
-        valueInfo = ValueInfo(
-          partial = res2.isPartial || this.isPartial,
-          latentInfo = LatentInfo {
-            (fn: Int => ValueInfo) => {
-              val resA = this.force(fn)
-              val resB = res2.force(fn)
-              resA.join(resB)
-            }
+        partial = res2.isPartial || this.isPartial,
+        latentInfo = MethodInfo {
+          (fn: Int => ValueInfo, heap: Heap) => {
+            val resA = this.force(fn, heap)
+            val resB = res2.force(fn, heap)
+            resA.join(resB)
           }
-        )
+        }
       )
+    }
+
+    private def joinObjectRes(res2: Res)(implicit ctx: Context): Res = {
+      Res(
+        effects = res2.effects ++ this.effects,
+        partial = res2.isPartial || this.isPartial,
+        latentInfo = ObjectInfo {
+          (tree: tpd.Tree, sym: Symbol, heap: Heap) => {
+            val resA = this.select(tree, sym, heap)
+            val resB = res2.select(tree, sym, heap)
+            resA.join(resB)
+          }
+        }
+      )
+    }
 
     override def toString: String =
       s"""~Res(
           ~| effects = ${if (effects.isEmpty) "()" else effects.mkString("\n|    - ", "\n|    - ", "")}
           ~| partial = $isPartial
-          ~| latent  = $isLatent
+          ~| latent  = $latentInfo
           ~)"""
       .stripMargin('~')
   }
@@ -474,21 +596,20 @@ class DataFlowChecker {
   def checkForce(sym: Symbol, pos: Position, env: Env)(implicit ctx: Context): Res =
     if (sym.is(Lazy) && !env.isForced(sym)) {
       env.addForced(sym)
-      val res = env.latentInfo(sym)(i => null)
+      indentedDebug(s">>> forcing $sym")
+      val res = env.latentInfo(sym).asMethod.apply(i => null, env.heap)
 
       if (res.isPartial) env.addPartial(sym)
-      if (res.isLatent) env.addLatent(sym, res.valueInfo.latentInfo)
+      if (res.isLatent) env.addLatent(sym, res.latentInfo)
 
       if (res.effects.nonEmpty) res.copy(effects = Vector(Force(sym, res.effects, pos)))
       else res
     }
-    else {
-      val valueInfo = ValueInfo(
+    else
+      Res(
         partial = env.isPartial(sym),
         latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
       )
-      Res(valueInfo = valueInfo)
-    }
 
   def checkParams(sym: Symbol, paramInfos: List[Type], args: List[Tree], env: Env, force: Boolean)(implicit ctx: Context): (Res, Vector[ValueInfo]) = {
     def isParamPartial(index: Int) = paramInfos(index).hasAnnotation(defn.PartialAnnot)
@@ -501,10 +622,10 @@ class DataFlowChecker {
       val res = apply(arg, env)
       effs ++= res.effects
       partial = partial || res.isPartial
-      infos = infos :+ res.valueInfo
+      infos = infos :+ ValueInfo(res.isPartial, res.latentInfo)
 
       if (res.isLatent && force) {
-        val effs2 = res.force(i => ValueInfo())            // latent values are not partial
+        val effs2 = res.force(i => ValueInfo(), env.heap)            // latent values are not partial
         if (effs2.effects.nonEmpty) {
           partial = true
           if (!isParamPartial(index)) effs = effs :+ Latent(arg, effs2.effects)
@@ -513,7 +634,7 @@ class DataFlowChecker {
       if (res.isPartial && !isParamPartial(index) && force) effs = effs :+ Argument(sym, arg)
     }
 
-    (Res(effects = effs, valueInfo = ValueInfo(partial = partial)), infos)
+    (Res(effects = effs, partial = partial), infos)
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[tpd.Tree]], env: Env)(implicit ctx: Context): Res = {
@@ -535,11 +656,12 @@ class DataFlowChecker {
       res1
     }
     else {
-      val latentInfo = env.latentInfo(tref.symbol)
-      val res2 = latentInfo(i => null)                  // TODO: propagate params to init
-      if (res2.effects.nonEmpty) res1 += Instantiate(tref.symbol, res2.effects, tree.pos)
-      val info = ValueInfo(partial = !tref.symbol.is(allOf(Synthetic, Module)))  // TODO: safe nested class instantiation?
-      res1.copy(valueInfo = info)
+      indentedDebug(s">>> create new instance ${tref.symbol}")
+      val latentInfo = env.latentInfo(tref.symbol).asMethod
+      val res2 = latentInfo(i => null, env.heap)               // TODO: propagate params to init
+      if (res2.effects.nonEmpty && !ctx.owner.is(Synthetic)) res2 += Instantiate(tref.symbol, res2.effects, tree.pos)
+      val partial = !tref.symbol.is(allOf(Synthetic, Module))  // TODO: safe nested class instantiation?
+      res2.copy(partial = partial)
     }
   }
 
@@ -553,7 +675,8 @@ class DataFlowChecker {
     var effs = res1.effects ++ res2.effects
 
     if (res1.isLatent) {
-      val res3 = res1.force(i => valueInfos(i))
+      indentedDebug(s">>> calling ${fun.symbol}")
+      val res3 = res1.force(i => valueInfos(i), env.heap)
       if (res3.effects.nonEmpty) effs = effs :+ Latent(tree, res3.effects)
 
       res3.copy(effects = effs)
@@ -562,14 +685,21 @@ class DataFlowChecker {
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
-    if (tree.qualifier.tpe <:< env.currentClass.thisType) return checkTermRef(tree, env)
+    if (tree.qualifier.tpe.dealias <:< env.currentClass.thisType) {
+      return checkTermRef(tree, env)
+    }
 
     val res = apply(tree.qualifier, env)
 
     if (res.isPartial)
       res += Member(tree.symbol, tree.qualifier, tree.pos)
 
-    res
+    if (res.isLatent && res.latentInfo.isObject) {
+      val res2 = res.select(tree, tree.symbol, env.heap)
+      res2 ++= res.effects
+      res2
+    }
+    else res
   }
 
   /** return the top-level local term within `cls` refered by `tp`, NoType otherwise.
@@ -616,7 +746,7 @@ class DataFlowChecker {
       (
         tp.symbol.isTerm && tp.symbol.is(AnyFlags, butNot = Method | Lazy | Deferred) && !hasPartialParam(env.currentClass) ||
         tp.symbol.hasAnnotation(defn.InitAnnot) || tp.symbol.hasAnnotation(defn.PartialAnnot) ||
-        isDefaultGetter(tp.symbol) || (env.initialized && env.currentClass.is(Final))
+        isDefaultGetter(tp.symbol) || (env.thisInitialized && env.currentClass.is(Final))
       )
 
 
@@ -637,35 +767,32 @@ class DataFlowChecker {
 
     if (sym.is(Lazy)) {                // a forced lazy val could be partial and latent
       val res2 = checkForce(sym, pos, env)
-      return res2.copy(effects = effs ++ res2.effects)
+      res2.copy(effects = effs ++ res2.effects)
     }
     else if (sym.is(Method)) {
       if (!(sym.hasAnnotation(defn.InitAnnot) || sym.isEffectivelyFinal || isDefaultGetter(sym)))
         effs = effs :+ OverrideRisk(sym, pos)
 
       if (sym.info.isInstanceOf[ExprType] && env.isLatent(sym)) {       // parameter-less call
-        val latentInfo = env.latentInfo(sym)
-        val res2 = latentInfo(i => null)
+        val latentInfo = env.latentInfo(sym).asMethod
+        val res2 = latentInfo(i => null, env.heap)
 
-        return {
-          if (res2.effects.nonEmpty) res2.copy(effects = Vector(Call(sym, effs ++ res2.effects, pos)))
-          else res2.copy(effects = effs)
-        }
+        if (res2.effects.nonEmpty) res2.copy(effects = Vector(Call(sym, effs ++ res2.effects, pos)))
+        else res2.copy(effects = effs)
       }
       else {
-        val info = if (env.isLatent(sym)) ValueInfo(latentInfo = env.latentInfo(sym)) else ValueInfo()
-        return Res(effects = effs, valueInfo = info)
+        val info = if (env.isLatent(sym)) env.latentInfo(sym) else null
+        Res(effects = effs, latentInfo = info)
       }
     } else
       Res(
         effects = effs,
-        valueInfo = ValueInfo(
-          partial = env.isPartial(sym),
-          latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
-        )
+        partial = env.isPartial(sym),
+        latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
       )
   }
 
+  // precondition: `env` should be the owner environment of `tree.symbol`
   def checkTermRef(tree: Tree, env: Env)(implicit ctx: Context): Res = {
     indentedDebug(s"${tree.show} is local ? = " + localRef(tree.tpe, env).exists)
 
@@ -684,20 +811,16 @@ class DataFlowChecker {
 
       Res(
         effects = effs,
-        valueInfo = ValueInfo(
-          partial = env.isPartial(sym),
-          latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
-        )
+        partial = env.isPartial(sym),
+        latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
       )
     }
   }
 
   def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
     Res(
-      valueInfo = ValueInfo(
-        partial = false,
-        latentInfo = env.latentInfo(sym)
-      )
+      partial = false,
+      latentInfo = env.latentInfo(sym)
     )
   }
 
@@ -710,7 +833,7 @@ class DataFlowChecker {
     val res2: Res = apply(thenp, env)
     val res3: Res = apply(elsep, envClone)
 
-    env.join(envClone)
+    env.heap.join(envClone.heap)
 
     res2.copy(effects = res1.effects ++ res2.effects).join(res3)
   }
@@ -721,17 +844,14 @@ class DataFlowChecker {
     if (!tpd.isWildcardArg(vdef.rhs) && !vdef.rhs.isEmpty)
       env.addInit(vdef.symbol)     // take `_` as uninitialized, otherwise it's initialized
 
-    if (res1.isPartial) {
-      if (env.initialized) // fully initialized
-        env.markInitialized
-      else
-        env.addPartial(vdef.symbol)
+    if (res1.isPartial && !env.thisInitialized) {
+      env.addPartial(vdef.symbol)
     }
 
     if (res1.isLatent)
-      env.addLatent(vdef.symbol, res1.valueInfo.latentInfo)
+      env.addLatent(vdef.symbol, res1.latentInfo)
 
-    res1.copy(valueInfo = ValueInfo())
+    Res(effects = res1.effects)
   }
 
   def checkStats(stats: List[Tree], env: Env)(implicit ctx: Context): Res =
@@ -742,8 +862,8 @@ class DataFlowChecker {
     }
 
   def checkBlock(tree: Block, env: Env)(implicit ctx: Context): Res = {
-    val env2 = env.fresh
-    indexLatents(tree.stats, env2)
+    val env2 = env.heap.newEnv(env.id)
+    indexStats(tree.stats, env2)
 
     val res1 = checkStats(tree.stats, env2)
     val res2 = apply(tree.expr, env2)
@@ -761,15 +881,42 @@ class DataFlowChecker {
     res
   }
 
-  def indexLatents(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
+  def indexClassDef(tdef: TypeDef, env: Env)(implicit ctx: Context): Unit = {
+    def nonStaticStats = tdef.rhs.asInstanceOf[Template].body.filter {
+      case vdef : ValDef  =>
+        !vdef.symbol.hasAnnotation(defn.ScalaStaticAnnot)
+      case stat =>
+        true
+    }
+
+    val tmpl = tdef.rhs.asInstanceOf[Template]
+
+    // TODO: handle params to init
+    val latent = MethodInfo { (valInfoFn, heap) =>
+      if (isChecking(tdef.symbol)) {
+        debug(s"recursive creation of ${tdef.symbol} found during initialization of ${env.currentClass}")
+        Res()
+      }
+      else checking(tdef.symbol) {
+        val env2 = heap.newEnv(env.id)
+        indexStats(nonStaticStats, env2)
+
+        apply(tmpl, env2)(ctx.withOwner(tdef.symbol)).copy(latentInfo = new ObjectEnv(id = env2.id))
+      }
+    }
+    env.addLocal(tdef.symbol)
+    env.addLatent(tdef.symbol, latent)
+  }
+
+  def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) =>
-      val latenInfo = LatentInfo { valInfoFn =>
+      val latenInfo = MethodInfo { (valInfoFn, heap) =>
         if (isChecking(ddef.symbol)) {
           debug(s"recursive call of ${ddef.symbol} found during initialization of ${env.currentClass}")
           Res()
         }
         else {
-          val env2 = env.fresh
+          val env2 = heap.newEnv(env.id)
           ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
             val paramInfo = valInfoFn(index)
             env2.addLocal(param.symbol)
@@ -784,30 +931,20 @@ class DataFlowChecker {
       env.addLocal(ddef.symbol)
       env.addLatent(ddef.symbol, latenInfo)
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      val latent = LatentInfo { valInfoFn =>
+      val latent = MethodInfo { (valInfoFn, heap) =>
+        val env2 = heap(env.id)
         if (isChecking(vdef.symbol)) {
           debug(s"recursive forcing of lazy ${vdef.symbol} found during initialization of ${env.currentClass}")
           Res()
         }
         else checking(vdef.symbol) {
-          apply(vdef.rhs, env)
+          apply(vdef.rhs, env2)
         }
       }
       env.addLocal(vdef.symbol)
       env.addLatent(vdef.symbol, latent)
     case tdef: TypeDef if tdef.isClassDef  =>
-      val env2 = env.fresh
-      val latent = LatentInfo { valInfoFn =>
-        if (isChecking(tdef.symbol)) {
-          debug(s"recursive creation of ${tdef.symbol} found during initialization of ${env.currentClass}")
-          Res()
-        }
-        else checking(tdef.symbol) {
-          apply(tdef.rhs, env2)(ctx.withOwner(tdef.symbol))
-        }
-      }
-      env.addLocal(tdef.symbol)
-      env.addLatent(tdef.symbol, latent)
+      indexClassDef(tdef, env)
     case mdef: MemberDef =>
       env.addLocal(mdef.symbol)
     case _ =>
@@ -815,15 +952,8 @@ class DataFlowChecker {
 
   def apply(tree: Tree, env: Env)(implicit ctx: Context): Res = trace("checking " + tree.show, env)(tree match {
     case tmpl: Template =>
-      val stats = tmpl.body.filter {
-        case vdef : ValDef  =>
-          !vdef.symbol.hasAnnotation(defn.ScalaStaticAnnot)
-        case stat =>
-          true
-      }
-      val env2 = env.fresh
-      indexLatents(stats, env2)
-      checkStats(stats, env2)
+      // TODO: check parents
+      checkStats(tmpl.body, env)
     case vdef : ValDef if !vdef.symbol.is(Lazy) =>
       checkValDef(vdef, env)
     case _: DefTree =>  // ignore other definitions
@@ -839,10 +969,12 @@ class DataFlowChecker {
     case tree @ Select(prefix, _) if tree.symbol.isTerm =>
       checkSelect(tree, env)
     case tree @ This(_) =>
-      if (env.isPartial(tree.symbol) && !env.initialized) Res(valueInfo = ValueInfo(partial = true))
-      else Res()
+      if (env.currentClass == tree.symbol && !env.thisInitialized)
+        Res(partial = true)
+      else
+        Res()
     case tree @ Super(qual, mix) =>
-      if (env.isPartial(qual.symbol) && !env.initialized) Res(valueInfo = ValueInfo(partial = true))
+      if (env.isPartial(qual.symbol) && !env.thisInitialized) Res(partial = true)
       else Res()
     case tree @ If(cond, thenp, elsep) =>
       checkIf(tree, env)
@@ -859,7 +991,7 @@ class DataFlowChecker {
       }
       else resRhs += CrossAssign(lhs, rhs)
 
-      resRhs.copy(valueInfo = ValueInfo())
+      resRhs.copy(partial = false, latentInfo = null)
     case tree @ Assign(lhs @ Select(prefix, _), rhs) =>
       val resLhs = apply(prefix, env)
       val resRhs = apply(rhs, env)
