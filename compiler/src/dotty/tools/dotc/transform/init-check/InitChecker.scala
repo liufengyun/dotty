@@ -30,34 +30,18 @@ import DataFlowChecker._
 
 /** This transform checks initialization is safe based on data-flow analysis
  *
- *  Partial values:
- *   - partial values cannot be used as full values
- *   - a partial value can only be assigned to uninitialized field of a partial value
- *   - selection on a partial value is an error, unless the accessed field is known to be fully initialized
+ *  - Partial
+ *  - Filled
+ *  - Full
  *
- *  Init methods:
- *   - methods called during initialization should be annotated with `@init` or non-overridable
- *   - an `@init` method should not call overridable non-init methods
- *   - an overriding or implementing `@init` may only access param fields or other init-methods on `this`
- *   - otherwise, it may access non-param fields on `this`
- *
- *  Partial values are defined as follows:
- *   - params with the type `T @partial`
- *   - `this` in constructor unless it's known to be fully initialized
- *   - `new C(args)`, if any argument is partial
- *   - `val x = rhs` where the right-hand-side is partial
+ *  1. A _full_ object is fully initialized.
+ *  2. All fields of a _filled_ object are assigned, but the fields may refer to non-full objects.
+ *  3. A _partial_ object may have unassigned fields.
  *
  *  TODO:
- *   - check init methods
- *   - check init class & parents
  *   - check default arguments of init methods
  *   - selection on ParamAccessors of partial value is fine if the param is not partial
  *   - handle tailrec calls during initialization (which captures `this`)
- *   - access latent parent field is unsafe, e.g. closure that close over dynamic dispatch methods
- *   - allow @partial annotation for init methods
- *   - args to overridable init methods match partiality & no latent effects
- *   - @init class can only be extended by @init class
- *   - parents of @init class should be @init or prefix not begin with `this`
  */
 class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   import tpd._
