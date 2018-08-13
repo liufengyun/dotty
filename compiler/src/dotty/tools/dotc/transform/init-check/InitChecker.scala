@@ -282,7 +282,7 @@ object DataFlowChecker {
       // TODO: use the same checker
       val checker = new DataFlowChecker
       val latent = if (env.isLatent(sym)) env.latentInfo(sym) else null
-      checker.checkTermRef(tree, env).copy(latentInfo = latent)
+      checker.checkLexicalLocalRef(sym, env, tree.pos).copy(latentInfo = latent)
     }
 
     override def toString: String = s"ObjectEnv($id)"
@@ -644,8 +644,7 @@ class DataFlowChecker {
       val latentInfo = env.latentInfo(tref.symbol).asMethod
       val res2 = latentInfo(i => null, env.heap)               // TODO: propagate params to init
       if (res2.effects.nonEmpty && !ctx.owner.is(Synthetic)) res2 += Instantiate(tref.symbol, res2.effects, tree.pos)
-      val partial = !tref.symbol.is(allOf(Synthetic, Module))  // TODO: safe nested class instantiation?
-      res2.copy(partial = partial)
+      res2
     }
   }
 
@@ -754,8 +753,9 @@ class DataFlowChecker {
       res2.copy(effects = effs ++ res2.effects)
     }
     else if (sym.is(Method)) {
-      if (!(sym.hasAnnotation(defn.InitAnnot) || sym.isEffectivelyFinal || isDefaultGetter(sym)))
-        effs = effs :+ OverrideRisk(sym, pos)
+      // TODO: check only on `this`
+      // if (!(sym.hasAnnotation(defn.InitAnnot) || sym.isEffectivelyFinal || isDefaultGetter(sym)))
+      //   effs = effs :+ OverrideRisk(sym, pos)
 
       if (sym.info.isInstanceOf[ExprType] && env.isLatent(sym)) {       // parameter-less call
         val latentInfo = env.latentInfo(sym).asMethod
