@@ -1,13 +1,11 @@
-import scala.annotation.partial
-
-abstract class Parent(p: String @partial) {
+abstract class Parent(p: Partial[String]) {
   val x = "name"
   lazy val z = bar
   def foo = bar
   def bar: Int
 }
 
-class Child(o: String @partial) extends Parent(o) {
+class Child(o: Partial[String]) extends Parent(o) {
   val y = "hello"
 
   val m = this.x

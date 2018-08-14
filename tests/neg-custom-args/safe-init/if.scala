@@ -25,9 +25,7 @@ class Foo(x: Int) {
 }
 
 
-import scala.annotation.partial
-
-class Bar(x: Int, m: String @partial) {
+class Bar(x: Int, m: Partial[String]) {
   var from: String = _
   var to: String = _
   val message = "hello, world"

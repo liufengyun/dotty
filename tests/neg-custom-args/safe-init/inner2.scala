@@ -11,7 +11,7 @@ class Foo {
 
 import scala.annotation.partial
 
-class Bar(val foo: Foo @partial) {
+class Bar(val foo: Partial[Foo]) {
   val inner = new foo.Inner   // error
 
   class Inner {

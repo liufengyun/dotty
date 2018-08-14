@@ -1,6 +1,4 @@
-import scala.annotation.partial
-
-class Foo(x: String @partial) {
+class Foo(x: Partial[String]) {
   var name: String = _
   name.size    // error
 
@@ -13,7 +11,7 @@ class Foo(x: String @partial) {
   name = x   // error
 }
 
-class Bar(x: String @partial) {
+class Bar(x: Partial[String]) {
   var name: String = x
   name.size    // error
 

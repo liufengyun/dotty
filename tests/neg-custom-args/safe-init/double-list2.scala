@@ -4,9 +4,7 @@ class List {
   def insert(data: AnyRef) = sentinel.insertAfter(data)
 }
 
-import scala.annotation.partial
-
-class Node(var prev: Node, var next: Node, parent: List @partial, data: AnyRef) {
+class Node(var prev: Node, var next: Node, parent: Partial[List], data: AnyRef) {
   parent.insert("hello")  // error
 
   def insertAfter(data: AnyRef) = {

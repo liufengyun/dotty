@@ -1,6 +1,3 @@
-import scala.annotation.partial
-
-
 class Parent(x: Int) {
   var name: String = _
   var addr: String = _                       // error: addr is not initialized
@@ -38,7 +35,7 @@ class Parent(x: Int) {
 }
 
 
-class Bar(val name: String, fun: (Int => Int) @partial) {
+class Bar(val name: String, fun: Partial[Int => Int]) {
   def result = fun(20)
 }
 

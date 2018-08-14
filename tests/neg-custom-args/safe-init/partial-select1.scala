@@ -5,9 +5,7 @@ class Parent {
   val name = "parent"
 }
 
-import scala.annotation.partial
-
-class Child(parent: Parent @partial) {
+class Child(parent: Partial[Parent]) {
   val name = "child"
   var number = 0
 

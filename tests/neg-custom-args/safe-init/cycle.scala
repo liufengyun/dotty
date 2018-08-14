@@ -7,9 +7,7 @@ class Parent {
   def show = child.show
 }
 
-import scala.annotation.partial
-
-class Child(parent: Parent @partial) {
+class Child(parent: Partial[Parent]) {
   val name = "child"
 
   println(parent.name) // error

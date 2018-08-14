@@ -598,7 +598,7 @@ class DataFlowChecker {
       )
 
   def checkParams(sym: Symbol, paramInfos: List[Type], args: List[Tree], env: Env, force: Boolean)(implicit ctx: Context): (Res, Vector[ValueInfo]) = {
-    def isParamPartial(index: Int) = paramInfos(index).hasAnnotation(defn.PartialAnnot)
+    def isParamPartial(index: Int) = paramInfos(index).dealiasKeepAnnots.hasAnnotation(defn.PartialAnnot)
 
     var effs = Vector.empty[Effect]
     var infos = Vector.empty[ValueInfo]
