@@ -168,7 +168,8 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       if (!seenClasses.contains(cls)) {
         seenClasses.addEntry(cls)
         for (mbr <- cls.info.decls)
-          if (mbr.isTerm && mbr.is(Deferred | Method) && mbr.hasAnnotation(defn.InitAnnot) &&
+          if (mbr.isTerm && mbr.is(Deferred | Method) &&
+              (mbr.hasAnnotation(defn.PartialAnnot) || mbr.hasAnnotation(defn.FilledAnnot)) &&
               !membersToCheck.contains(mbr.name))
             membersToCheck = membersToCheck.updated(mbr.name, mbr.info.asSeenFrom(self, mbr.owner))
           parents(cls).foreach(addDecls)
@@ -176,8 +177,8 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     parents(cls).foreach(addDecls)  // no need to check methods defined in current class
 
     def invalidImplementMsg(sym: Symbol) =
-      s"""|@scala.annotation.init required for ${sym.show} in ${sym.owner.show}
-          |Because the abstract method it implements is marked as `@init`."""
+      s"""|@scala.annotation.partial required for ${sym.show} in ${sym.owner.show}
+          |Because the abstract method it implements is marked as `@partial` or `@filled`."""
         .stripMargin
 
     for (name <- membersToCheck.keys) {
@@ -187,7 +188,7 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
         if mbrd.info.overrides(tp, matchLoosely = true)
       } {
         val mbr = mbrd.symbol
-        if (mbr.owner.ne(cls) && !mbr.hasAnnotation(defn.InitAnnot))
+        if (mbr.owner.ne(cls) && !mbr.hasAnnotation(defn.PartialAnnot))
           ctx.warning(invalidImplementMsg(mbr), cls.pos)
       }
     }
