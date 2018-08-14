@@ -816,6 +816,8 @@ class Definitions {
   def ShowAsInfixAnnot(implicit ctx: Context) = ShowAsInfixAnotType.symbol.asClass
   lazy val PartialAnnotType = ctx.requiredClassRef("scala.annotation.partial")
   def PartialAnnot(implicit ctx: Context) = PartialAnnotType.symbol.asClass
+  lazy val FilledAnnotType = ctx.requiredClassRef("scala.annotation.filled")
+  def FilledAnnot(implicit ctx: Context) = FilledAnnotType.symbol.asClass
   lazy val InitAnnotType = ctx.requiredClassRef("scala.annotation.init")
   def InitAnnot(implicit ctx: Context) = InitAnnotType.symbol.asClass
 

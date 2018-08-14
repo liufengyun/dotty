@@ -22,33 +22,14 @@ import config.Printers.init.{ println => debug }
 import Constants.Constant
 import collection.mutable
 
-object InitChecker {
-  val name = "initChecker"
-}
-
 import DataFlowChecker._
 
-/** This transform checks initialization is safe based on data-flow analysis
- *
- *  - Partial
- *  - Filled
- *  - Full
- *
- *  1. A _full_ object is fully initialized.
- *  2. All fields of a _filled_ object are assigned, but the fields may refer to non-full objects.
- *  3. A _partial_ object may have unassigned fields.
- *
- *  TODO:
- *   - check default arguments of init methods
- *   - selection on ParamAccessors of partial value is fine if the param is not partial
- *   - handle tailrec calls during initialization (which captures `this`)
- */
-class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
-  import tpd._
-
-  override def phaseName: String = InitChecker.name
+object InitChecker {
+  val name = "initChecker"
 
   def isPartial(sym: Symbol)(implicit ctx: Context) = sym.info.hasAnnotation(defn.PartialAnnot)
+
+  def isFilled(sym: Symbol)(implicit ctx: Context) = sym.info.hasAnnotation(defn.FilledAnnot)
 
   def isConcreteField(sym: Symbol)(implicit ctx: Context) =
     sym.isTerm && sym.is(AnyFlags, butNot = Deferred | Method | Local | Private)
@@ -112,6 +93,27 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     env.setPartialSyms(partial)
     env.setLocals(noninit ++ partial)
   }
+}
+
+/** This transform checks initialization is safe based on data-flow analysis
+ *
+ *  - Partial
+ *  - Filled
+ *  - Full
+ *
+ *  1. A _full_ object is fully initialized.
+ *  2. All fields of a _filled_ object are assigned, but the fields may refer to non-full objects.
+ *  3. A _partial_ object may have unassigned fields.
+ *
+ *  TODO:
+ *   - check default arguments of init methods
+ *   - selection on ParamAccessors of partial value is fine if the param is not partial
+ *   - handle tailrec calls during initialization (which captures `this`)
+ */
+class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
+  import tpd._, InitChecker._
+
+  override def phaseName: String = InitChecker.name
 
   override def transformDefDef(ddef: tpd.DefDef)(implicit ctx: Context): tpd.Tree = {
     val sym = ddef.symbol
