@@ -283,17 +283,17 @@ object DataFlowChecker {
       case (m1: MethodInfo, m2: MethodInfo) =>
         MethodInfo {
           (fn: Int => ValueInfo, heap: Heap) => {
-            val resA = m1.apply(fn, heap)
-            val resB = m2.apply(fn, heap)
-            resA.join(resB)
+            val res1 = m1.apply(fn, heap)
+            val res2 = m2.apply(fn, heap)
+            res1.join(res2)
           }
         }
       case (o1: ObjectInfo, o2: ObjectInfo) =>
         ObjectInfo {
           (sym: Symbol, heap: Heap) => {
-            val resA = this.select(sym, heap)
-            val resB = other.select(sym, heap)
-            resA.join(resB)
+            val res1 = o1.select(sym, heap)
+            val res2 = o2.select(sym, heap)
+            res1.join(res2)
           }
         }
       case _ =>
@@ -307,8 +307,8 @@ object DataFlowChecker {
     def apply(valInfoFn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = fun(valInfoFn, heap)
   }
 
-  case class ObjectInfo(fun: (Symbol, Heap) => Res) extends LatentInfo {
-    def select(sym: Symbol, heap: Heap)(implicit ctx: Context): Res = fun(sym, heap)
+  case class ObjectInfo(fun: (Symbol, Heap, Position) => Res) extends LatentInfo {
+    def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = fun(sym, heap, pos)
   }
 
   class Heap extends Cloneable {
@@ -369,8 +369,6 @@ object DataFlowChecker {
     def isFull    = assigned && state == State.Full
 
     def isLatent  = latentInfo != NoLatent
-
-    def setAssigned = this.copy(assigned = true)
   }
 
   object Env {
@@ -458,8 +456,13 @@ object DataFlowChecker {
       _syms.foreach { case (sym: Symbol, info: SymInfo) =>
         assert(env2.contains(sym))
         val info2 = env2._syms(sym)
+        // path-insensitive approximation:
+        // 1. if a variable is assigned in one branch, but not in the other branch, we
+        //    treat the variable as not assigned.
+        // 2. a lazy variable is force if it's forced in either branch
+        // 3. a variable gets the lowest possible state
         if (!info.assigned || !info2.assigned)
-          _syms(sym) = info.copy(assigned = false)
+          _syms(sym) = info.copy(assigned = false, latentInfo == NoLatent)
         else
           _syms(sym) = info.copy(
             assigned   =  false,
