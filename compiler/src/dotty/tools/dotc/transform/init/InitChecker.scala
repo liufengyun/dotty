@@ -132,13 +132,10 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val root = Analyzer.createRootEnv
 
     // create a custom ObjectInfo for `this`, which implements special rules about member selection
-    val env = Analyzer.setupConstructorEnv(root.newEnv(), cls)
-    analyzer.indexStats(tree.body, env)
-    val thisInfo =  Analyzer.currentObjectInfo(env.id)
-
-    root.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
+    val env = Analyzer.setupConstructorEnv(root, cls, tree, analyzer)
 
     val res = analyzer.checkStats(tree.body, root)
+
     res.effects.foreach(_.report)
     env.nonInit.foreach { sym =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)

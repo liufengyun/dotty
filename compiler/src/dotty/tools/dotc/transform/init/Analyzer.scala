@@ -52,7 +52,14 @@ object Analyzer {
     env
   }
 
-  def setupConstructorEnv(env: Env, cls: ClassSymbol)(implicit ctx: Context) = {
+  def objectInfo(id: Int, static: Boolean = false) = ObjectInfo {
+    (sym: Symbol, heap: Heap, pos: Position) =>
+      if (static) Rules.selectStatic(heap(env.id), sym)
+      else Rules.selectDynamic(heap(env.id), sym)
+  }
+
+  def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: Template, analyzer: Analyzer, static: Boolean = false)(implicit ctx: Context) = {
+    val env = outerEnv.newEnv
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
     for (param <- accessors)
@@ -62,6 +69,13 @@ object Analyzer {
     // should be ignored for data-flow analysis.
     for (decl <- cls.info.decls.toList if isNonParamField(decl))
       env(param) = SymInfo(assigned = false)
+
+    analyzer.indexStats(tmpl.body, env)
+
+    val thisInfo =  objectInfo(env.id, cls.isEffectivelyFinal || static)
+    outerEnv(cls) = SymInfo(state = State.Partial, latentInfo = thisInfo)
+
+    env
   }
 
   /*
@@ -95,10 +109,6 @@ object Analyzer {
     env.setLocals(noninit ++ partial)
   } */
 
-  def currentObjectInfo(id: Int): ObjectInfo = ObjectInfo {
-    (sym: Symbol, heap: Heap, pos: Position) => Rules.selectOnThis(heap(id), sym)
-  }
-
   // TODO: default methods are not necessarily safe, if they call other methods
   def isDefaultGetter(sym: Symbol)(implicit ctx: Context) = sym.name.is(NameKinds.DefaultGetterName)
 
@@ -123,7 +133,7 @@ object Analyzer {
 }
 
 object Rules {
-  def selectOnThis(env: Env, sym: Symbol, pos: Position): Res = {
+  def selectDynamic(env: Env, sym: Symbol, pos: Position): Res =
     if (env.contains(sym)) {
       if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
       else if (sym.is(Method)) {
@@ -142,7 +152,19 @@ object Rules {
       if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
       else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
       else selectFilledField(env, sym, pos)
-  }
+
+
+  def selectStatic(env: Env, sym: Symbol, pos: Position): Res =
+    if (env.contains(sym)) {
+      if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
+      else if (sym.is(Method)) selectLocalMethod(env, sym, pos)
+      else selectLocalField(env, sym, pos)
+    }
+    else // select on super
+      if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
+      else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
+      else selectFilledField(env, sym, pos)
+
 
   def selectFilledField(sym: Symbol, pos: Position): Res =
     Res(state = typeState(sym.info))
@@ -493,30 +515,30 @@ class Analyzer {
   }
 
   def indexClassDef(tdef: TypeDef, env: Env)(implicit ctx: Context): Unit = {
-    def nonStaticStats = tdef.rhs.asInstanceOf[Template].body.filter {
+    val tmpl = tdef.rhs.asInstanceOf[Template]
+
+    def nonStaticStats = tmpl.body.filter {
       case vdef : ValDef  =>
         !vdef.symbol.hasAnnotation(defn.ScalaStaticAnnot)
       case stat =>
         true
     }
 
-    val tmpl = tdef.rhs.asInstanceOf[Template]
-
-    // TODO: handle params to init
+    // TODO: (1) handle params to init; (2) handle parent calls;
     val latent = MethodInfo { (valInfoFn, heap) =>
       if (isChecking(tdef.symbol)) {
         debug(s"recursive creation of ${tdef.symbol} found during initialization of ${env.currentClass}")
         Res()
       }
       else checking(tdef.symbol) {
-        val env2 = env.newEnv(heap)
-        indexStats(nonStaticStats, env2)
+        val outerEnv = heap(env.id)
+        val env = Analyzer.setupConstructorEnv(outerEnv, tdef.symbol, tmpl, this, static = true)
 
-        apply(tmpl, env2)(ctx.withOwner(tdef.symbol)).copy(latentInfo = new ObjectEnv(id = env2.id))
+        apply(tmpl, outerEnv)(ctx.withOwner(tdef.symbol))
+        Res(latenInfo = Analyzer.objectInfo(env.id, static = true))
       }
     }
-    env.addLocal(tdef.symbol)
-    env.addLatent(tdef.symbol, latent)
+    env(tdef.symbol) = SymInfo(latentInfo = latent)
   }
 
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
@@ -528,7 +550,7 @@ class Analyzer {
           Res()
         }
         else {
-          val env2 = heap.newEnv(env.id)
+          val env2 = env.newEnv(heap)
           ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
             val ValueInfo(state, latentInfo) = valInfoFn(index)
             env2(param.symbol) = SymInfo(assigned = true, state = state, latentInfo = latentInfo)
@@ -550,12 +572,9 @@ class Analyzer {
           apply(vdef.rhs, env2)
         }
       }
-      env.addLocal(vdef.symbol)
-      env.addLatent(vdef.symbol, latent)
+      env(vdef.symbol) = SymInfo(latenInfo = latenInfo)
     case tdef: TypeDef if tdef.isClassDef  =>
       indexClassDef(tdef, env)
-    case mdef: MemberDef =>
-      env.addLocal(mdef.symbol)
     case _ =>
   }
 
