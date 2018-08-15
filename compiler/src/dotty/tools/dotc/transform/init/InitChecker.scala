@@ -132,7 +132,7 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val root = Analyzer.createRootEnv
 
     // create a custom ObjectInfo for `this`, which implements special rules about member selection
-    val env = Analyzer.setupThisEnv(root.newEnv(), cls)
+    val env = Analyzer.setupConstructorEnv(root.newEnv(), cls)
     analyzer.indexStats(tree.body, env)
     val thisInfo =  Analyzer.currentObjectInfo(env.id)
 

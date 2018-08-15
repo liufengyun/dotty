@@ -52,22 +52,16 @@ object Analyzer {
     env
   }
 
-  def setupThisEnv(env: Env, cls: ClassSymbol)(implicit ctx: Context) = {
+  def setupConstructorEnv(env: Env, cls: ClassSymbol)(implicit ctx: Context) = {
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
-    for (param <- accessors) env(param) = SymInfo(assigned = true, state = typeState(sym.info))
+    for (param <- accessors)
+      env(param) = SymInfo(assigned = true, state = typeState(sym.info))
 
-    // fields of super class
-    // for (
-    //   parent <- cls.baseClasses.tail;
-    //   decl <- parent.info.decls.toList
-    //   if isConcreteField(decl)
-    // )
-    // env(param) = SymInfo(assigned = true, state = typeState(sym))
-
-    // non-initialized fields of current class
+    // non-initialized fields of current class, state information on them
+    // should be ignored for data-flow analysis.
     for (decl <- cls.info.decls.toList if isNonParamField(decl))
-    env(param) = SymInfo(assigned = false)
+      env(param) = SymInfo(assigned = false)
   }
 
   /*
@@ -529,24 +523,22 @@ class Analyzer {
     case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) =>
       val latenInfo = MethodInfo { (valInfoFn, heap) =>
         if (isChecking(ddef.symbol)) {
+          // TODO: force latent effects on arguments
           debug(s"recursive call of ${ddef.symbol} found during initialization of ${env.currentClass}")
           Res()
         }
         else {
           val env2 = heap.newEnv(env.id)
           ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-            val paramInfo = valInfoFn(index)
-            env2.addLocal(param.symbol)
-            if (paramInfo.isLatent) env2.addLatent(param.symbol, paramInfo.latentInfo)
-            if (paramInfo.partial) env2.addPartial(param.symbol)
+            val ValueInfo(state, latentInfo) = valInfoFn(index)
+            env2(param.symbol) = SymInfo(assigned = true, state = state, latentInfo = latentInfo)
           }
 
           checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
         }
       }
 
-      env.addLocal(ddef.symbol)
-      env.addLatent(ddef.symbol, latenInfo)
+      env(ddef.symbol) = SymInfo(latenInfo = latenInfo)
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
       val latent = MethodInfo { (valInfoFn, heap) =>
         val env2 = heap(env.id)
