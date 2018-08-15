@@ -67,11 +67,14 @@ case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect            
 case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
 case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
 
+object Effect {
+  type Effects = Vector[Effect]
+}
+
 //=======================================
 //               LatentInfo
 //=======================================
 
-type Effects = Vector[Effect]
 sealed trait LatentInfo {
   def asMethod: MethodInfo = this.asInstanceOf[MethodInfo]
   def asObject: ObjectInfo = this.asInstanceOf[ObjectInfo]
@@ -188,11 +191,14 @@ object Env {
   }
 }
 
-/** The state of method stack and objects
+/** The state of closure and objects
   *
   *  @param outerId required for modelling closures
   *
-  *  Invariant: the data stored in the immutable map must be immutable
+  *  Invariants:
+  *  1. the data stored in the immutable map must be immutable
+  *  2. environment refer each other via `id`, which implies LatentInfo should
+  *     never use captured environment other than its `id`.
   */
 class Env(val outerId: Int) extends Cloneable {
   val id: Int = Env.uniqueId
@@ -218,7 +224,7 @@ class Env(val outerId: Int) extends Cloneable {
 
   def add(sym: Symbol, info: SymInfo) = _syms(sym) = info
 
-  def info(sym: Symbol): Boolean =
+  def info(sym: Symbol): SymInfo =
     if (_syms.contains(sym)) _syms(sym)
     else outer.info(sym)
 
@@ -299,6 +305,7 @@ class Env(val outerId: Int) extends Cloneable {
 //=======================================
 //           Res
 //=======================================
+import Effect._
 
 case class Res(var effects: Effects = Vector.empty, var state: State = State.Full, var latentInfo: LatentInfo = NoLatent) {
   def isLatent  = latentInfo != NoLatent
@@ -310,7 +317,7 @@ case class Res(var effects: Effects = Vector.empty, var state: State = State.Ful
   def +=(eff: Effect): Unit = effects = effects :+ eff
   def ++=(effs: Effects) = effects ++= effs
 
-  def force(valInfofn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = {
+  def call(valInfofn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = {
     latentInfo.asMethod.apply(valInfofn, heap)
   }
 
