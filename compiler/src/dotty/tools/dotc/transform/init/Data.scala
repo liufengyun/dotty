@@ -13,8 +13,11 @@ import Types._
 import Decorators._
 import util.Positions._
 import config.Printers.init.{ println => debug }
+import collection.mutable
 
-//------------ Effects ---------------
+//=======================================
+//             Effects
+//=======================================
 
 sealed trait Effect {
   def report(implicit ctx: Context): Unit = this match {
@@ -64,7 +67,9 @@ case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect            
 case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
 case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
 
-//------------ LatentInfo ---------------
+//=======================================
+//               LatentInfo
+//=======================================
 
 type Effects = Vector[Effect]
 sealed trait LatentInfo {
@@ -107,9 +112,13 @@ case class ObjectInfo(fun: (Symbol, Heap, Position) => Res) extends LatentInfo {
   def select(sym: Symbol, heap: Heap, pos: Position): Res = fun(sym, heap, pos)
 }
 
+//=======================================
+//           Heap / Env
+//=======================================
+
 class Heap extends Cloneable {
   private var _parent: Heap = null
-  protected var _envMap: Map[Int, Env] = Map()
+  protected var _envMap: mutable.Map[Int, Env] = Map()
 
   def apply(id: Int) =_envMap(id)
 
@@ -117,7 +126,7 @@ class Heap extends Cloneable {
 
   def addEnv(env: Env) = {
     env.heap = this
-    _envMap += env.id -> env
+    _envMap(env.id) = env
   }
 
   override def clone: Heap = {
@@ -127,7 +136,7 @@ class Heap extends Cloneable {
     this._envMap.foreach { case (id, env) =>
       val env2 = env.clone
       env2.heap = heap
-      heap._envMap = heap._envMap.updated(id, env2)
+      heap(id) = env2
     }
 
     heap
@@ -137,29 +146,33 @@ class Heap extends Cloneable {
     assert(heap2._parent `eq` this)
     heap2._envMap.foreach { case (id: Int, env: Env) =>
       if (this.contains(id))
-        this._envMap = this._envMap.updated(id, this(id).join(env))
+        this._envMap(id) = this(id).join(env)
       else {
         env.heap = this
-        this._envMap = this._envMap.updated(id, env)
+        this._envMap(id) = env
       }
     }
     this
   }
 }
 
-object State {
-  val Partial = 1
-  val Filled  = 2
-  val Full    = 3
+class State(state: Int) extends AnyVal {
+  def join(other: State): State = new State(Math.min(state, other.state))
 }
 
-case class ValueInfo(state: Int = State.Full, latentInfo: LatentInfo = NoLatent) {
+object State {
+  val Partial = new State(1)
+  val Filled  = new State(2)
+  val Full    = new State(3)
+}
+
+case class ValueInfo(state: State = State.Full, latentInfo: LatentInfo = NoLatent) {
   def isPartial = state == State.Partial
   def isFilled  = state == State.Filled
   def isFull    = state == State.Full
 }
 
-case class SymInfo(assigned: Boolean = false, forced: Boolean = false, state: Int = State.Full, latentInfo: LatentInfo = NoLatent) {
+case class SymInfo(assigned: Boolean = false, forced: Boolean = false, state: State = State.Full, latentInfo: LatentInfo = NoLatent) {
   def isPartial = assigned && state == State.Partial
   def isFilled  = assigned && state == State.Filled
   def isFull    = assigned && state == State.Full
@@ -209,7 +222,7 @@ class Env(val outerId: Int) extends Cloneable {
     if (_syms.contains(sym)) _syms(sym)
     else outer.info(sym)
 
-  def state: Int =
+  def state: State =
     if (_syms.contains(sym)) _syms(sym).state
     else outer.getState(sym)
   def setState(sym: Symbol, state: State): Unit =
@@ -263,7 +276,7 @@ class Env(val outerId: Int) extends Cloneable {
         _syms(sym) = info.copy(
           assigned   =  false,
           forced     =  info.forced || info2.forced,
-          state      =  Math.min(info.state, info2.state),
+          state      =  info.state.join(info2.state),
           latentInfo =  info.latentInfo.join(info2.latentInfo)
         )
     }
@@ -283,7 +296,11 @@ class Env(val outerId: Int) extends Cloneable {
     .stripMargin('~')
 }
 
-case class Res(var effects: Effects = Vector.empty, var state: Int = State.Full, var latentInfo: LatentInfo = NoLatent) {
+//=======================================
+//           Res
+//=======================================
+
+case class Res(var effects: Effects = Vector.empty, var state: State = State.Full, var latentInfo: LatentInfo = NoLatent) {
   def isLatent  = latentInfo != NoLatent
 
   def isPartial = state == State.Partial
@@ -305,17 +322,17 @@ case class Res(var effects: Effects = Vector.empty, var state: Int = State.Full,
   def join(res2: Res)(implicit ctx: Context): Res =
     if (!isLatent) {
       res2 ++= this.effects
-      res2.state = Math.min(res2.state, this.state)
+      res2.state = res2.state.join(this.state)
       res2
     }
     else if (!res2.isLatent) {
       this ++= res2.effects
-      this.state = Math.min(res2.state, this.state)
+      this.state = res2.state.join(this.state)
       this
     }
     else Res(
       effects    = res2.effects ++ this.effects,
-      partial    = res2.isPartial || this.isPartial,
+      state      = res2.state.join(this.state),
       latentInfo = res2.latentInfo.join(latentInfo)
     )
 
