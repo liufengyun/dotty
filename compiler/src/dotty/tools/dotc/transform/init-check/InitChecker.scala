@@ -1,5 +1,6 @@
 package dotty.tools.dotc
 package transform
+package init
 
 import core._
 import MegaPhase._
@@ -31,6 +32,11 @@ object InitChecker {
 
   def isFilled(sym: Symbol)(implicit ctx: Context) = sym.info.hasAnnotation(defn.FilledAnnot)
 
+  def paramState(sym: Symbol)(implicit ctx: Context) =
+    if (isPartial(sym)) State.Partial
+    else if (isFilled(sym)) State.Filled
+    else State.Full
+
   def isConcreteField(sym: Symbol)(implicit ctx: Context) =
     sym.isTerm && sym.is(AnyFlags, butNot = Deferred | Method | Local | Private)
 
@@ -47,28 +53,22 @@ object InitChecker {
     env
   }
 
-  def setupClassEnv(env: FreshEnv, cls: ClassSymbol)(implicit ctx: Context) = {
+  def setupClassEnv(env: Env, cls: ClassSymbol)(implicit ctx: Context) = {
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
-    var noninit = Set[Symbol]()    // definitions that are not initialized
-    var partial = Set[Symbol]()    // definitions that are partial initialized
+    for (param <- accessors) env.add(param, SymInfo(assigned = true, state = paramState(sym)))
 
-    // partial fields of current class
-    for (param <- accessors if isPartial(param)) partial += param
-
-    // partial fields of super class
+    // fields of super class
     for (
       parent <- cls.baseClasses.tail;
       decl <- parent.info.decls.toList
-      if isConcreteField(decl) && isPartial(decl)
+      if isConcreteField(decl)
     )
-    partial += decl
+    env.add(param, SymInfo(assigned = true, state = paramState(sym)))
 
     // non-initialized fields of current class
     for (decl <- cls.info.decls.toList if isNonParamField(decl))
-    noninit += decl
-
-    env.setNonInit(noninit).setPartialSyms(partial).setLocals(noninit ++ partial)
+    env.add(param, SymInfo(assigned = false))
   }
 
   def setupMethodEnv(env: FreshEnv, cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
@@ -205,16 +205,18 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     // current class env needs special setup
     val root = createRootEnv
 
-    val classEnv = setupClassEnv(root.newEnv(), cls)
-    checker.indexStats(tree.body, classEnv)
-    val thisInfo = new ObjectEnv(classEnv.id)
+    // create a custom ObjectInfo for `this`, which implements special rules about member selection
+    val env = setupClassEnv(root.newEnv(), cls)
+    checker.indexStats(tree.body, env)
+    val thisInfo =  ObjectInfo {
+      (sym: Symbol, heap: Heap, pos: Position) => ???
+    }
 
-    root.setPartialSyms(Set(cls))
-    root.setLatentSyms(Map(cls -> thisInfo))
+    root.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
 
-    val res = checker.checkStats(tree.body, classEnv)
+    val res = checker.checkStats(tree.body, root)
     res.effects.foreach(_.report)
-    classEnv.nonInit.foreach { sym =>
+    env.nonInit.foreach { sym =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 
@@ -304,11 +306,11 @@ object DataFlowChecker {
   object NoLatent extends LatenInfo
 
   case class MethodInfo(fun: (Int => ValueInfo, Heap) => Res) extends LatentInfo {
-    def apply(valInfoFn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = fun(valInfoFn, heap)
+    def apply(valInfoFn: Int => ValueInfo, heap: Heap): Res = fun(valInfoFn, heap)
   }
 
   case class ObjectInfo(fun: (Symbol, Heap, Position) => Res) extends LatentInfo {
-    def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = fun(sym, heap, pos)
+    def select(sym: Symbol, heap: Heap, pos: Position): Res = fun(sym, heap, pos)
   }
 
   class Heap extends Cloneable {
