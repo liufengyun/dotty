@@ -49,8 +49,11 @@ sealed trait Effect {
     case Latent(tree, effs)  =>
       effs.foreach(_.report)
       ctx.warning(s"Latent effects results in initialization errors", tree.pos)
-    case RecCreate(cls, tree)  =>
+    case RecCreate(cls, tree) =>
       ctx.warning(s"Possible recursive creation of instance for ${cls.show}", tree.pos)
+    case Generic(msg, pos) =>
+      ctx.warning(msg, pos)
+
   }
 }
 
@@ -66,6 +69,7 @@ case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Ef
 case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
 case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
 case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
+case class Generic(msg: => String, pos: Position) extends Effect                     // generic problem
 
 object Effect {
   type Effects = Vector[Effect]
@@ -222,9 +226,9 @@ class Env(val outerId: Int) extends Cloneable {
     env
   }
 
-  def add(sym: Symbol, info: SymInfo) = _syms(sym) = info
+  def update(sym: Symbol, info: SymInfo) = _syms(sym) = info
 
-  def info(sym: Symbol): SymInfo =
+  def apply(sym: Symbol): SymInfo =
     if (_syms.contains(sym)) _syms(sym)
     else outer.info(sym)
 

@@ -23,81 +23,8 @@ import config.Printers.init.{ println => debug }
 import Constants.Constant
 import collection.mutable
 
-object Checker {
+object InitChecker {
   val name = "initChecker"
-
-  def isPartial(sym: Symbol)(implicit ctx: Context) = sym.info.hasAnnotation(defn.PartialAnnot)
-
-  def isFilled(sym: Symbol)(implicit ctx: Context) = sym.info.hasAnnotation(defn.FilledAnnot)
-
-  def paramState(sym: Symbol)(implicit ctx: Context) =
-    if (isPartial(sym)) State.Partial
-    else if (isFilled(sym)) State.Filled
-    else State.Full
-
-  def isConcreteField(sym: Symbol)(implicit ctx: Context) =
-    sym.isTerm && sym.is(AnyFlags, butNot = Deferred | Method | Local | Private)
-
-  def isNonParamField(sym: Symbol)(implicit ctx: Context) =
-    sym.isTerm && sym.is(AnyFlags, butNot = Method | ParamAccessor | Lazy | Deferred)
-
-  def isField(sym: Symbol)(implicit ctx: Context) =
-    sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
-
-  def createRootEnv: Env = {
-    val heap = new Heap
-    val env = new Env(-1)
-    heap.addEnv(heap)
-    env
-  }
-
-  def setupClassEnv(env: Env, cls: ClassSymbol)(implicit ctx: Context) = {
-    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
-
-    for (param <- accessors) env.add(param, SymInfo(assigned = true, state = paramState(sym)))
-
-    // fields of super class
-    for (
-      parent <- cls.baseClasses.tail;
-      decl <- parent.info.decls.toList
-      if isConcreteField(decl)
-    )
-    env.add(param, SymInfo(assigned = true, state = paramState(sym)))
-
-    // non-initialized fields of current class
-    for (decl <- cls.info.decls.toList if isNonParamField(decl))
-    env.add(param, SymInfo(assigned = false))
-  }
-
-  def setupMethodEnv(env: FreshEnv, cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
-    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
-
-    var noninit = Set[Symbol]()    // definitions that are not initialized
-    var partial = Set[Symbol]()    // definitions that are partial initialized
-
-    // partial fields of current class
-    for (param <- accessors if isPartial(param)) partial += param
-
-    // partial fields of super class
-    for (
-      parent <- cls.baseClasses.tail;
-      decl <- parent.info.decls.toList
-      if isConcreteField(decl) && isPartial(decl)
-    )
-    partial += decl
-
-    // non-initialized fields of current class
-    if (cls.is(Trait))
-      for (decl <- cls.info.decls.toList if isField(decl))
-      noninit += decl
-    else if (isOverriding)
-      for (decl <- cls.info.decls.toList if isNonParamField(decl))
-      noninit += decl
-
-    env.setNonInit(noninit)
-    env.setPartialSyms(partial)
-    env.setLocals(noninit ++ partial)
-  }
 }
 
 /** This transform checks initialization is safe based on data-flow analysis
@@ -115,16 +42,17 @@ object Checker {
  *   - selection on ParamAccessors of partial value is fine if the param is not partial
  *   - handle tailrec calls during initialization (which captures `this`)
  */
-class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
-  import tpd._, InitChecker._
+class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
+  import tpd._
 
   override def phaseName: String = InitChecker.name
 
+  /*
   override def transformDefDef(ddef: tpd.DefDef)(implicit ctx: Context): tpd.Tree = {
     val sym = ddef.symbol
-    val overrideInit = sym.allOverriddenSymbols.exists(_.hasAnnotation(defn.InitAnnot))
+    val overrideInit = sym.allOverriddenSymbols.exists(_.hasAnnotation(defn.PartialAnnot))
 
-    if (overrideInit ||sym.hasAnnotation(defn.InitAnnot)) {
+    if (overrideInit ||sym.hasAnnotation(defn.PartialAnnot)) {
       val cls = sym.owner.asClass
       val root = createRootEnv
 
@@ -142,7 +70,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     }
 
     ddef
-  }
+  } */
 
   override def transformTemplate(tree: Template)(implicit ctx: Context): Tree = {
     val cls = ctx.owner.asClass
@@ -198,21 +126,19 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       }
     }
 
-    val checker = new DataFlowChecker
+    val analyzer = new Analyzer
 
     // current class env needs special setup
-    val root = createRootEnv
+    val root = Analyzer.createRootEnv
 
     // create a custom ObjectInfo for `this`, which implements special rules about member selection
-    val env = setupClassEnv(root.newEnv(), cls)
-    checker.indexStats(tree.body, env)
-    val thisInfo =  ObjectInfo {
-      (sym: Symbol, heap: Heap, pos: Position) => ???
-    }
+    val env = Analyzer.setupThisEnv(root.newEnv(), cls)
+    analyzer.indexStats(tree.body, env)
+    val thisInfo =  Analyzer.currentObjectInfo(env.id)
 
     root.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
 
-    val res = checker.checkStats(tree.body, root)
+    val res = analyzer.checkStats(tree.body, root)
     res.effects.foreach(_.report)
     env.nonInit.foreach { sym =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)

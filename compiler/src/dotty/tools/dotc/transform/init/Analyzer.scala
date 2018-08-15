@@ -24,6 +24,86 @@ import Constants.Constant
 import collection.mutable
 
 object Analyzer {
+  def isPartial(tp: Type)(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.PartialAnnot)
+  def isFilled(tp: Type)(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.FilledAnnot)
+
+  def isPartial(sym: Symbol)(implicit ctx: Context) = sym.hasAnnotation(defn.PartialAnnot)
+  def isFilled(sym: Symbol)(implicit ctx: Context) = sym.hasAnnotation(defn.FilledAnnot)
+  def isInit(sym: Symbol)(implicit ctx: Context) = sym.hasAnnotation(defn.InitAnnot)
+
+  def typeState(tp: Type)(implicit ctx: Context) =
+    if (isPartial(tp)) State.Partial
+    else if (isFilled(tp)) State.Filled
+    else State.Full
+
+  def isConcreteField(sym: Symbol)(implicit ctx: Context) =
+    sym.isTerm && sym.is(AnyFlags, butNot = Deferred | Method | Local | Private)
+
+  def isNonParamField(sym: Symbol)(implicit ctx: Context) =
+    sym.isTerm && sym.is(AnyFlags, butNot = Method | ParamAccessor | Lazy | Deferred)
+
+  def isField(sym: Symbol)(implicit ctx: Context) =
+    sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
+
+  def createRootEnv: Env = {
+    val heap = new Heap
+    val env = new Env(-1)
+    heap.addEnv(heap)
+    env
+  }
+
+  def setupThisEnv(env: Env, cls: ClassSymbol)(implicit ctx: Context) = {
+    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
+
+    for (param <- accessors) env(param) = SymInfo(assigned = true, state = typeState(sym.info))
+
+    // fields of super class
+    // for (
+    //   parent <- cls.baseClasses.tail;
+    //   decl <- parent.info.decls.toList
+    //   if isConcreteField(decl)
+    // )
+    // env(param) = SymInfo(assigned = true, state = typeState(sym))
+
+    // non-initialized fields of current class
+    for (decl <- cls.info.decls.toList if isNonParamField(decl))
+    env(param) = SymInfo(assigned = false)
+  }
+
+  /*
+  def setupMethodEnv(env: FreshEnv, cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
+    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
+
+    var noninit = Set[Symbol]()    // definitions that are not initialized
+    var partial = Set[Symbol]()    // definitions that are partial initialized
+
+    // partial fields of current class
+    for (param <- accessors if isPartial(param)) partial += param
+
+    // partial fields of super class
+    for (
+      parent <- cls.baseClasses.tail;
+      decl <- parent.info.decls.toList
+      if isConcreteField(decl) && isPartial(decl)
+    )
+    partial += decl
+
+    // non-initialized fields of current class
+    if (cls.is(Trait))
+      for (decl <- cls.info.decls.toList if isField(decl))
+      noninit += decl
+    else if (isOverriding)
+      for (decl <- cls.info.decls.toList if isNonParamField(decl))
+      noninit += decl
+
+    env.setNonInit(noninit)
+    env.setPartialSyms(partial)
+    env.setLocals(noninit ++ partial)
+  } */
+
+  def currentObjectInfo(id: Int): ObjectInfo = ObjectInfo {
+    (sym: Symbol, heap: Heap, pos: Position) => Rules.selectOnThis(heap(id), sym)
+  }
 
   // TODO: default methods are not necessarily safe, if they call other methods
   def isDefaultGetter(sym: Symbol)(implicit ctx: Context) = sym.name.is(NameKinds.DefaultGetterName)
@@ -45,6 +125,83 @@ object Analyzer {
         Some((extract(tpt.tpe),  fn.tpe.asInstanceOf[TermRef], vargss))
       }
     }
+  }
+}
+
+object Rules {
+  def selectOnThis(env: Env, sym: Symbol, pos: Position): Res = {
+    if (env.contains(sym)) {
+      if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
+      else if (sym.is(Method)) {
+        var effs = Vector.empty[Effect]
+
+        if (!sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
+          effs = effs :+ OverrideRisk(sym, pos)
+
+        val res = selectLocalMethod(env, sym, pos)
+        res ++= effs
+        res
+      }
+      else selectLocalField(env, sym, pos)
+    }
+    else // select on super
+      if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
+      else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
+      else selectFilledField(env, sym, pos)
+  }
+
+  def selectFilledField(sym: Symbol, pos: Position): Res =
+    Res(state = typeState(sym.info))
+
+  def selectFilledLazy(sym: Symbol, pos: Position): Res =
+    if (isFilled(sym) || isPartial(sym))
+      Res(state = typeState(sym.info))
+    else
+      Res(effects = Vector(Generic("The lazy field should be marked as `@partial` or `@filled` in order to be accessed", pos)))
+
+  def selectFilledMethod(sym: Symbol, pos: Position): Res =
+    if (!isFilled(sym) || !isPartial(sym))
+      Res(effects = Vector(Generic("The method should be marked as `@partial` or `@filled` in order to be called", pos)))
+    else if (sym.info.isInstanceOf[ExprType]) {   // parameter-less call
+      Res(state = typeState(sym.info.widenExpr))
+    }
+    else Res()
+
+  def selectLocalField(env: Env, sym: Symbol, pos: Position): Res = {
+    val symInfo = env(sym)
+
+    var effs = Vector.empty[Effect]
+    if (!env.isAssigned(sym)) effs = effs :+ Uninit(sym, pos)
+
+    if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
+      effs = effs :+ UseAbstractDef(sym, pos)
+
+    Res(effects = effs, state = symInfo.state, latenInfo = symInfo.latentInfo)
+  }
+
+  def selectLocalMethod(env: Env, sym: Symbol, pos: Position): Res = {
+    val symInfo = env(sym)
+    if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
+      val latentInfo = symInfo.latentInfo.asMethod
+      val res2 = latentInfo(i => null, env.heap)
+
+      if (res2.effects.nonEmpty)
+        res2.effects = Vector(Call(sym, res2.effects, pos))
+
+      res2
+    }
+    else Res(effects, latentInfo = symInfo.latentInfo)
+  }
+
+  def selectLocalLazy(env: Env, sym: Symbol, pos: Position): Res = {
+    val symInfo = env(sym)
+    if (!symInfo.isForced) {
+      env.setForced(symInfo)
+      indentedDebug(s">>> forcing $sym")
+      val res = symInfo.latentInfo.asMethod.apply(i => null, env.heap)
+      env(sym) = symInfo.copy(state = res.state, latenInfo = res.latenInfo)
+    }
+    else Res(state = symInfo.state, latentInfo = symInfo.latentInfo)
   }
 }
 
@@ -70,24 +227,6 @@ class Analyzer {
     s.split("\n").mkString(if (padFirst) padding else "", "\n" + padding, "")
 
   def indentedDebug(msg: String) = debug(pad(msg, padFirst = true))
-
-  def checkForce(sym: Symbol, pos: Position, env: Env)(implicit ctx: Context): Res =
-    if (sym.is(Lazy) && !env.isForced(sym)) {
-      env.addForced(sym)
-      indentedDebug(s">>> forcing $sym")
-      val res = env.latentInfo(sym).asMethod.apply(i => null, env.heap)
-
-      if (res.isPartial) env.addPartial(sym)
-      if (res.isLatent) env.addLatent(sym, res.latentInfo)
-
-      if (res.effects.nonEmpty) res.copy(effects = Vector(Force(sym, res.effects, pos)))
-      else res
-    }
-    else
-      Res(
-        partial = env.isPartial(sym),
-        latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
-      )
 
   def checkParams(sym: Symbol, paramInfos: List[Type], args: List[Tree], env: Env, force: Boolean)(implicit ctx: Context): (Res, Vector[ValueInfo]) = {
     def isParamPartial(index: Int) = paramInfos(index).dealiasKeepAnnots.hasAnnotation(defn.PartialAnnot)
