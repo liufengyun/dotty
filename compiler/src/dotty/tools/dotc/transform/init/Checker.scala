@@ -23,7 +23,7 @@ import config.Printers.init.{ println => debug }
 import Constants.Constant
 import collection.mutable
 
-object InitChecker {
+object Checker {
   val name = "initChecker"
 }
 
@@ -42,10 +42,10 @@ object InitChecker {
  *   - selection on ParamAccessors of partial value is fine if the param is not partial
  *   - handle tailrec calls during initialization (which captures `this`)
  */
-class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
+class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   import tpd._
 
-  override def phaseName: String = InitChecker.name
+  override def phaseName: String = Checker.name
 
   /*
   override def transformDefDef(ddef: tpd.DefDef)(implicit ctx: Context): tpd.Tree = {
@@ -137,7 +137,7 @@ class InitChecker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val res = analyzer.checkStats(tree.body, root)
 
     res.effects.foreach(_.report)
-    env.nonInit.foreach { sym =>
+    env.notAssigned.foreach { sym =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 

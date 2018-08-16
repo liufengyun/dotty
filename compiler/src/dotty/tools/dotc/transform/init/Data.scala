@@ -69,7 +69,7 @@ case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Ef
 case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
 case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
 case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
-case class Generic(msg: => String, pos: Position) extends Effect                     // generic problem
+case class Generic(msg: String, pos: Position) extends Effect                     // generic problem
 
 object Effect {
   type Effects = Vector[Effect]
@@ -85,7 +85,7 @@ sealed trait LatentInfo {
   def isMethod: Boolean = this.isInstanceOf[MethodInfo]
   def isObject: Boolean = !isMethod
 
-  def join(other: LatentInfo): LatentInfo = (this, other) match {
+  def join(other: LatentInfo)(implicit ctx: Context): LatentInfo = (this, other) match {
     case (NoLatent, _) => other
     case (_, NoLatent) => this
     case (m1: MethodInfo, m2: MethodInfo) =>
@@ -97,25 +97,31 @@ sealed trait LatentInfo {
         }
       }
     case (o1: ObjectInfo, o2: ObjectInfo) =>
-      ObjectInfo {
-        (sym: Symbol, heap: Heap) => {
-          val res1 = o1.select(sym, heap)
-          val res2 = o2.select(sym, heap)
+      ObjectInfo(
+        (sym: Symbol, heap: Heap, pos: Position) => {
+          val res1 = o1.select(sym, heap, pos)
+          val res2 = o2.select(sym, heap, pos)
           res1.join(res2)
+        },
+        (sym: Symbol, valInfo: ValueInfo, heap: Heap) => {
+          o1.assign(sym, valInfo, heap)
+          o2.assign(sym, valInfo, heap)
         }
-      }
+      )
     case _ =>
       throw new Exception(s"Can't join $this and $other")
   }
 }
 
-object NoLatent extends LatenInfo
+object NoLatent extends LatentInfo
 
 case class MethodInfo(fun: (Int => ValueInfo, Heap) => Res) extends LatentInfo {
   def apply(valInfoFn: Int => ValueInfo, heap: Heap): Res = fun(valInfoFn, heap)
 }
 
-case class ObjectInfo(select: (Symbol, Heap, Position) => Res, assign: (Symbol, ValueInfo) => Unit) extends LatentInfo
+case class ObjectInfo(
+  select: (Symbol, Heap, Position) => Res,
+  assign: (Symbol, ValueInfo, Heap) => Unit) extends LatentInfo
 
 //=======================================
 //           Heap / Env
@@ -123,7 +129,7 @@ case class ObjectInfo(select: (Symbol, Heap, Position) => Res, assign: (Symbol, 
 
 class Heap extends Cloneable {
   private var _parent: Heap = null
-  protected var _envMap: mutable.Map[Int, Env] = Map()
+  protected var _envMap: mutable.Map[Int, Env] = mutable.Map()
 
   def apply(id: Int) =_envMap(id)
 
@@ -137,17 +143,18 @@ class Heap extends Cloneable {
   override def clone: Heap = {
     val heap = new Heap
     heap._parent = this
+    heap._envMap = mutable.Map()
 
     this._envMap.foreach { case (id, env) =>
       val env2 = env.clone
       env2.heap = heap
-      heap(id) = env2
+      heap._envMap(id) = env2
     }
 
     heap
   }
 
-  def join(heap2: Heap): Heap = {
+  def join(heap2: Heap)(implicit ctx: Context): Heap = {
     assert(heap2._parent `eq` this)
     heap2._envMap.foreach { case (id: Int, env: Env) =>
       if (this.contains(id))
@@ -161,7 +168,7 @@ class Heap extends Cloneable {
   }
 }
 
-class State(state: Int) extends AnyVal {
+class State(val state: Int) extends AnyVal {
   def join(other: State): State = new State(Math.min(state, other.state))
 
   def <(other: State): Boolean = this.state < other.state
@@ -177,6 +184,8 @@ case class ValueInfo(state: State = State.Full, latentInfo: LatentInfo = NoLaten
   def isPartial = state == State.Partial
   def isFilled  = state == State.Filled
   def isFull    = state == State.Full
+
+  def isLatent  = latentInfo != NoLatent
 }
 
 case class SymInfo(assigned: Boolean = false, forced: Boolean = false, state: State = State.Full, latentInfo: LatentInfo = NoLatent) {
@@ -220,36 +229,34 @@ class Env(val outerId: Int) extends Cloneable {
     heap2(this.id)
   }
 
-  def newEnv(heap: Heap = this.heap): FreshEnv = {
+  def newEnv(heap: Heap = this.heap): Env = {
     val env = new Env(outerId)
     heap.addEnv(env)
     env
   }
 
-  def add(sym: Symbol, info: SymInfo) = _syms(sym) = info
+  def add(sym: Symbol, info: SymInfo) =
+    _syms = _syms.updated(sym, info)
 
-  def update(sym: Symbol, info: SymInfo) =
-    if (_syms.contains(sym)) _syms(sym) = info
+  def update(sym: Symbol, info: SymInfo): Unit =
+    if (_syms.contains(sym)) _syms = _syms.updated(sym, info)
     else outer.update(sym, info)
 
-  def contains(sym: Symbol) = _syms.contains(sym) || outer.contains(sym)
+  def contains(sym: Symbol): Boolean = _syms.contains(sym) || outer.contains(sym)
 
   def apply(sym: Symbol): SymInfo =
     if (_syms.contains(sym)) _syms(sym)
-    else outer.info(sym)
+    else outer(sym)
 
-  def state: State =
-    if (_syms.contains(sym)) _syms(sym).state
-    else outer.getState(sym)
   def setState(sym: Symbol, state: State): Unit =
-    if (_syms.contains(sym)) _syms(sym) = _syms(sym).copy(state = state)
-    else outer.setState(sym)
+    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(state = state))
+    else outer.setState(sym, state)
 
   def isLatent(sym: Symbol): Boolean =
     if (_syms.contains(sym)) _syms(sym).isLatent
     else outer.isLatent(sym)
   def setLatent(sym: Symbol, info: LatentInfo): Unit =
-    if (_syms.contains(sym)) _syms(sym) = _syms(sym).copy(latentInfo = info)
+    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(latentInfo = info))
     else outer.setLatent(sym, info)
   def latentInfo(sym: Symbol): LatentInfo =
     if (_syms.contains(sym)) _syms(sym).latentInfo
@@ -259,14 +266,14 @@ class Env(val outerId: Int) extends Cloneable {
     if (_syms.contains(sym)) _syms(sym).forced
     else outer.isForced(sym)
   def setForced(sym: Symbol): Unit =
-    if (_syms.contains(sym)) _syms(sym) = _syms(sym).copy(forced = true)
+    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(forced = true))
     else outer.setForced(sym)
 
   def isAssigned(sym: Symbol): Boolean =
     if (_syms.contains(sym)) _syms(sym).assigned
     else outer.isAssigned(sym)
   def setAssigned(sym: Symbol): Unit =
-    if (_syms.contains(sym)) _syms(sym) = _syms(sym).copy(assigned = true)
+    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(assigned = true))
     else outer.setAssigned(sym)
 
   def notAssigned = _syms.keys.filter(sym => !_syms(sym).assigned)
@@ -275,7 +282,7 @@ class Env(val outerId: Int) extends Cloneable {
   def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
   def latentSyms  = _syms.keys.filter(sym => _syms(sym).isLatent)
 
-  def join(env2: Env): Env = {
+  def join(env2: Env)(implicit ctx: Context): Env = {
     assert(this.id == env2.id)
 
     _syms.foreach { case (sym: Symbol, info: SymInfo) =>
@@ -287,13 +294,16 @@ class Env(val outerId: Int) extends Cloneable {
       // 2. a lazy variable is force if it's forced in either branch
       // 3. a variable gets the lowest possible state
       if (!info.assigned || !info2.assigned)
-        _syms(sym) = info.copy(assigned = false, latentInfo == NoLatent)
+        _syms = _syms.updated(sym, info.copy(assigned = false, latentInfo = NoLatent))
       else
-        _syms(sym) = info.copy(
-          assigned   =  false,
-          forced     =  info.forced || info2.forced,
-          state      =  info.state.join(info2.state),
-          latentInfo =  info.latentInfo.join(info2.latentInfo)
+        _syms = _syms.updated(
+          sym,
+          info.copy(
+            assigned   =  false,
+            forced     =  info.forced || info2.forced,
+            state      =  info.state.join(info2.state),
+            latentInfo =  info.latentInfo.join(info2.latentInfo)
+          )
         )
     }
 
@@ -327,7 +337,7 @@ case class Res(var effects: Effects = Vector.empty, var state: State = State.Ful
   def +=(eff: Effect): Unit = effects = effects :+ eff
   def ++=(effs: Effects) = effects ++= effs
 
-  def hasError  = effects.size > 0
+  def hasErrors  = effects.size > 0
 
   def join(res2: Res)(implicit ctx: Context): Res =
     if (!isLatent) {
