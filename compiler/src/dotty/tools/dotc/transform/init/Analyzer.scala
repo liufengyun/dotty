@@ -376,32 +376,6 @@ class Analyzer {
     res
   }
 
-  /** return the top-level local term within `cls` refered by `tp`, NoType otherwise.
-   *
-   *  There are following cases:
-   *   - select on this: `C.this.x`
-   *   - select on super: `C.super[Q].x`
-   *   - local ident: `x`
-   *   - select on self: `self.x` (TODO)
-   */
-  def localRef(tp: Type, env: Env)(implicit ctx: Context): Type = tp match {
-    case NamedTypeEx(ThisType(tref), _) if tref.symbol.isContainedIn(env.currentClass) => tp
-    case NamedTypeEx(SuperType(ThisType(tref), _), _) if tref.symbol.isContainedIn(env.currentClass) => tp
-    case ref @ NamedTypeEx(NoPrefix, _) if ref.symbol.isContainedIn(env.currentClass) => ref
-    case ref @ NamedTypeEx(tp: TermRef, _) =>
-      if (tp <:< env.currentClass.thisType) ref    // tp is alias of `this`
-      else localRef(tp, env)
-    case _ => NoType
-  }
-
-  object NamedTypeEx {
-    def unapply(tp: NamedType)(implicit ctx: Context): Option[(Type, Symbol)] = tp match {
-      case ref: TermRef => Some(ref.prefix -> ref.symbol)
-      case ref: TypeRef => Some(ref.prefix -> ref.symbol)
-      case _ => None
-    }
-  }
-
   def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp match {
     case tp @ TermRef(NoPrefix, _) =>
       val sym = tp.symbol
