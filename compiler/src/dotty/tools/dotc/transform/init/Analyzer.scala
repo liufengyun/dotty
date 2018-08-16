@@ -31,6 +31,8 @@ object Analyzer {
   def isFilled(sym: Symbol)(implicit ctx: Context) = sym.hasAnnotation(defn.FilledAnnot)
   def isInit(sym: Symbol)(implicit ctx: Context) = sym.hasAnnotation(defn.InitAnnot)
 
+  def isPrimaryConstructorFields(sym: Symbol)(implicit ctx: Context) = sym.is(ParamAccessor)
+
   def typeState(tp: Type)(implicit ctx: Context) =
     if (isPartial(tp)) State.Partial
     else if (isFilled(tp)) State.Filled
@@ -63,17 +65,17 @@ object Analyzer {
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
     for (param <- accessors)
-      env(param) = SymInfo(assigned = true, state = typeState(sym.info))
+      env.add(param, SymInfo(assigned = true, state = typeState(sym.info)))
 
     // non-initialized fields of current class, state information on them
     // should be ignored for data-flow analysis.
     for (decl <- cls.info.decls.toList if isNonParamField(decl))
-      env(param) = SymInfo(assigned = false)
+      env.add(param, SymInfo(assigned = false))
 
     analyzer.indexStats(tmpl.body, env)
 
     val thisInfo =  objectInfo(env.id, cls.isEffectivelyFinal || static)
-    outerEnv(cls) = SymInfo(state = State.Partial, latentInfo = thisInfo)
+    outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
 
     env
   }
@@ -219,6 +221,55 @@ object Rules {
     }
     else Res(state = symInfo.state, latentInfo = symInfo.latentInfo)
   }
+
+  def call(valInfofn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = {
+    latentInfo.asMethod.apply(valInfofn, heap)
+  }
+
+  def select(res: Res, sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    if (res.isLatent) {
+      if (res.latentInfo.isObject) res.latentInfo.asObject.select(sym, heap, pos)
+      else {
+        assert(sym.name.toString == "apply")
+        Res(latentInfo = res.latentInfo, effects = res.effects) // closures
+      }
+    }
+    else {
+      if (res.isPartial) {
+        if (sym.is(Method)) {
+          if (!Analyzer.isPartial(sym))
+            res += Generic("The method should be marked as `@partial` in order to be called", pos)
+        }
+        else if (sym.is(Lazy)) {
+          if (!Analyzer.isPartial(sym))
+            res += Generic("The lazy field should be marked as `@partial` in order to be accessed", pos)
+        }
+        else {
+          if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
+            res += Generic("Cannot access fields on a partial object", pos)
+        }
+      }
+      else if (res.isFilled) {
+        if (sym.is(Method)) {
+          if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
+            res += Generic("The method should be marked as `@partial` or `@filled` in order to be called", pos)
+          res
+        }
+        else if (sym.is(Lazy)) {
+          if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
+            res += Generic("The lazy field should be marked as `@partial` or `@filled` in order to be accessed", pos)
+
+          Res(state = Analyzer.typeState(sym.info), effects = res.effects)
+        }
+        else {
+          if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
+            res += Generic("Cannot access fields on a partial object", pos)
+
+          Res(state = Analyzer.typeState(sym.info), effects = res.effects)
+        }
+    }
+    else Res()
+  }
 }
 
 class Analyzer {
@@ -317,21 +368,12 @@ class Analyzer {
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
-    if (tree.qualifier.tpe.dealias <:< env.currentClass.thisType) {
-      return checkTermRef(tree, env)
-    }
+    val prefixRes = apply(tree.qualifier, env)
 
-    val res = apply(tree.qualifier, env)
+    val res = Rules.select(prefixRes, tree.symbol, env.heap, tree.pos)
+    res ++= prefixRes.effects
 
-    if (res.isPartial)
-      res += Member(tree.symbol, tree.qualifier, tree.pos)
-
-    if (res.isLatent && res.latentInfo.isObject) {
-      val res2 = res.select(tree, tree.symbol, env.heap)
-      res2 ++= res.effects
-      res2
-    }
-    else res
+    res
   }
 
   /** return the top-level local term within `cls` refered by `tp`, NoType otherwise.
@@ -425,37 +467,29 @@ class Analyzer {
       )
   }
 
-  // precondition: `env` should be the owner environment of `tree.symbol`
-  def checkTermRef(tree: Tree, env: Env)(implicit ctx: Context): Res = {
-    indentedDebug(s"${tree.show} is local ? = " + localRef(tree.tpe, env).exists)
-
-    val ref: TermRef = localRef(tree.tpe, env) match {
-      case NoType         => return Res()
-      case tmref: TermRef => tmref
-    }
-
-    val sym = ref.symbol
-
-    if (isLexicalRef(ref, env)) checkLexicalLocalRef(sym, env, tree.pos)
-    else {
-      var effs = Vector.empty[Effect]
-      if (isPartial(ref.prefix, env) && !isSafeVirtualAccess(ref, env))
-        effs =  effs :+ Member(sym, tree, tree.pos)
-
-      Res(
-        effects = effs,
-        partial = env.isPartial(sym),
-        latentInfo = if (env.isLatent(sym)) env.latentInfo(sym) else null
-      )
-    }
+  def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp match {
+    case tp @ TermRef(NoPrefix, _) =>
+      val sym = tp.symbol
+      if (env.contains(sym)) {
+        if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
+        else if (sym.is(Method)) selectLocalMethod(env, sym, pos)
+        else selectLocalField(env, sym, pos)
+      }
+      else Res()
+    case tp @ TermRef(prefix, _) =>
+      val res = checkRef(prefix, env, pos)
+      res.select(tp.symbol, env.heap, pos)
+    case tp @ ThisType(tref) =>
+      val cls = tref.symbol
+      if (env.contains(sym)) Res(latenInfo = env(cls).latenInfo)
+      else Res() // TODO: all outer `this` should be in environment
+    case tp @ SuperType(thistpe, supertpe) =>
+      // TODO : handle `supertpe`
+      checkRef(ThisType(thistpe), env, pos)
   }
 
-  def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
-    Res(
-      partial = false,
-      latentInfo = env.latentInfo(sym)
-    )
-  }
+  def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res =
+    Res(latentInfo = env(sym).latenInfo)
 
   def checkIf(tree: If, env: Env)(implicit ctx: Context): Res = {
     val If(cond, thenp, elsep) = tree
@@ -472,19 +506,15 @@ class Analyzer {
   }
 
   def checkValDef(vdef: ValDef, env: Env)(implicit ctx: Context): Res = {
-    val res1 = apply(vdef.rhs, env)
+    val rhsRes = apply(vdef.rhs, env)
 
     if (!tpd.isWildcardArg(vdef.rhs) && !vdef.rhs.isEmpty)
-      env.addInit(vdef.symbol)     // take `_` as uninitialized, otherwise it's initialized
+      env.setAssigned(vdef.symbol)     // take `_` as uninitialized, otherwise it's initialized
 
-    if (res1.isPartial && !env.thisInitialized) {
-      env.addPartial(vdef.symbol)
-    }
+    val symInfo = env(vdef.symbol)
+    env(vdef.symbol) = symInfo.copy(latenInfo = rhsRes.latentInfo, state = rhsRes.state)
 
-    if (res1.isLatent)
-      env.addLatent(vdef.symbol, res1.latentInfo)
-
-    Res(effects = res1.effects)
+    Res(effects = rhsRes.effects)
   }
 
   def checkStats(stats: List[Tree], env: Env)(implicit ctx: Context): Res =
@@ -541,7 +571,7 @@ class Analyzer {
         Res(latenInfo = Analyzer.objectInfo(env.id, static = true), effects = res.effects)
       }
     }
-    env(tdef.symbol.primaryConstructor) = SymInfo(latentInfo = latent)
+    env.add(tdef.symbol.primaryConstructor, SymInfo(latentInfo = latent))
   }
 
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
@@ -556,14 +586,14 @@ class Analyzer {
           val env2 = env.newEnv(heap)
           ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
             val ValueInfo(state, latentInfo) = valInfoFn(index)
-            env2(param.symbol) = SymInfo(assigned = true, state = state, latentInfo = latentInfo)
+            env2.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
           }
 
           checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
         }
       }
 
-      env(ddef.symbol) = SymInfo(latenInfo = latenInfo)
+      env.add(ddef.symbol, SymInfo(latenInfo = latenInfo))
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
       val latent = MethodInfo { (valInfoFn, heap) =>
         val env2 = heap(env.id)
@@ -575,7 +605,7 @@ class Analyzer {
           apply(vdef.rhs, env2)
         }
       }
-      env(vdef.symbol) = SymInfo(latenInfo = latenInfo)
+      env.add(vdef.symbol,  SymInfo(latenInfo = latenInfo))
     case tdef: TypeDef if tdef.isClassDef  =>
       indexClassDef(tdef, env)
     case _ =>
@@ -592,26 +622,20 @@ class Analyzer {
     case Closure(_, meth, _) =>
       checkClosure(meth.symbol, tree, env)
     case tree: Ident if tree.symbol.isTerm =>
-      checkTermRef(tree, env)
-    case tree @ Select(prefix @ (This(_) | Super(_, _)), _) if tree.symbol.isTerm =>
-      checkTermRef(tree, env)
-    case tree @ NewEx(tref, init, argss) =>
-      checkNew(tree, tref, init, argss, env)
+      checkRef(tree.tpe, env, tree.pos)
+    case tree @ This(tref) =>
+      checkRef(tree.tpe, env, tree.pos)
+    case tree @ Super(qual, mix) =>
+      checkRef(tree.tpe, env, tree.pos)
     case tree @ Select(prefix, _) if tree.symbol.isTerm =>
       checkSelect(tree, env)
-    case tree @ This(_) =>
-      if (env.currentClass == tree.symbol && !env.thisInitialized)
-        Res(partial = true)
-      else
-        Res()
-    case tree @ Super(qual, mix) =>
-      if (env.isPartial(qual.symbol) && !env.thisInitialized) Res(partial = true)
-      else Res()
     case tree @ If(cond, thenp, elsep) =>
       checkIf(tree, env)
     case tree @ Apply(_, _) =>
       val (fn, targs, vargss) = decomposeCall(tree)
       checkApply(tree, fn, vargss, env)
+    case tree @ NewEx(tref, init, argss) =>
+      checkNew(tree, tref, init, argss, env)
     case tree @ Assign(lhs @ (Ident(_) | Select(This(_), _)), rhs) =>
       val resRhs = apply(rhs, env)
 

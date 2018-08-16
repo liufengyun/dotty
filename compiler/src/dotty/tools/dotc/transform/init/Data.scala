@@ -226,7 +226,13 @@ class Env(val outerId: Int) extends Cloneable {
     env
   }
 
-  def update(sym: Symbol, info: SymInfo) = _syms(sym) = info
+  def add(sym: Symbol, info: SymInfo) = _syms(sym) = info
+
+  def update(sym: Symbol, info: SymInfo) =
+    if (_syms.contains(sym)) _syms(sym) = info
+    else outer.update(sym, info)
+
+  def contains(sym: Symbol) = _syms.contains(sym) || outer.contains(sym)
 
   def apply(sym: Symbol): SymInfo =
     if (_syms.contains(sym)) _syms(sym)
@@ -320,15 +326,6 @@ case class Res(var effects: Effects = Vector.empty, var state: State = State.Ful
 
   def +=(eff: Effect): Unit = effects = effects :+ eff
   def ++=(effs: Effects) = effects ++= effs
-
-  def call(valInfofn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = {
-    latentInfo.asMethod.apply(valInfofn, heap)
-  }
-
-  def select(tree: tpd.Tree, sym: Symbol, heap: Heap)(implicit ctx: Context): Res = {
-    if (isLatent) latentInfo.asObject.select(tree, sym, heap)
-    else Res()
-  }
 
   def join(res2: Res)(implicit ctx: Context): Res =
     if (!isLatent) {
