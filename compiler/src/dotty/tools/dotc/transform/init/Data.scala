@@ -165,6 +165,8 @@ class Heap extends Cloneable {
 
 class State(state: Int) extends AnyVal {
   def join(other: State): State = new State(Math.min(state, other.state))
+
+  def <(other: State): Boolean = this.state < other.state
 }
 
 object State {
@@ -326,6 +328,8 @@ case class Res(var effects: Effects = Vector.empty, var state: State = State.Ful
 
   def +=(eff: Effect): Unit = effects = effects :+ eff
   def ++=(effs: Effects) = effects ++= effs
+
+  def hasError  = effects.size > 0
 
   def join(res2: Res)(implicit ctx: Context): Res =
     if (!isLatent) {

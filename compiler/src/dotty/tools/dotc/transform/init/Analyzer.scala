@@ -114,9 +114,6 @@ object Analyzer {
   // TODO: default methods are not necessarily safe, if they call other methods
   def isDefaultGetter(sym: Symbol)(implicit ctx: Context) = sym.name.is(NameKinds.DefaultGetterName)
 
-  def hasPartialParam(cls: ClassSymbol)(implicit ctx: Context): Boolean =
-    cls.paramAccessors.exists(_.hasAnnotation(defn.PartialAnnot))
-
   object NewEx {
     def extract(tp: Type)(implicit ctx: Context): TypeRef = tp.dealias match {
       case tref: TypeRef => tref
@@ -225,10 +222,6 @@ object Rules {
     else Res(state = symInfo.state, latentInfo = symInfo.latentInfo)
   }
 
-  def call(valInfofn: Int => ValueInfo, heap: Heap)(implicit ctx: Context): Res = {
-    latentInfo.asMethod.apply(valInfofn, heap)
-  }
-
   def select(res: Res, sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     if (res.isLatent) {
       if (res.latentInfo.isObject) res.latentInfo.asObject.select(sym, heap, pos)
@@ -303,17 +296,15 @@ class Analyzer {
   def indentedDebug(msg: String) = debug(pad(msg, padFirst = true))
 
   def checkParams(sym: Symbol, paramInfos: List[Type], args: List[Tree], env: Env, force: Boolean)(implicit ctx: Context): (Res, Vector[ValueInfo]) = {
-    def isParamPartial(index: Int) = paramInfos(index).dealiasKeepAnnots.hasAnnotation(defn.PartialAnnot)
+    def paramState(index: Int) = Analyzer.typeState(paramInfos(index))
 
     var effs = Vector.empty[Effect]
     var infos = Vector.empty[ValueInfo]
-    var partial = false
 
     args.zipWithIndex.foreach { case (arg, index) =>
       val res = apply(arg, env)
-      effs ++= res.effects
-      partial = partial || res.isPartial
-      infos = infos :+ ValueInfo(res.isPartial, res.latentInfo)
+      effs = effs :+ res.effects
+      infos = infos :+ ValueInfo(res.state, res.latentInfo)
 
       if (res.isLatent && force) {
         val effs2 = res.force(i => ValueInfo(), env.heap)            // latent values are not partial
@@ -322,10 +313,10 @@ class Analyzer {
           if (!isParamPartial(index)) effs = effs :+ Latent(arg, effs2.effects)
         }
       }
-      if (res.isPartial && !isParamPartial(index) && force) effs = effs :+ Argument(sym, arg)
+      if (res.state < paramState(index) && force) effs = effs :+ Argument(sym, arg)
     }
 
-    (Res(effects = effs, partial = partial), infos)
+    (Res(effects = effs), infos)
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[tpd.Tree]], env: Env)(implicit ctx: Context): Res = {
@@ -355,32 +346,65 @@ class Analyzer {
     }
   }
 
+  def force(latentInfo: LatentInfo, heap: Heap, pos: Position): Res = {
+    // TODO: better handle latent objects
+    if (latentInfo.isObject)
+      return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
+
+    val res = latentInfo.asMethod(i => ValueInfo(), heap)
+    if (res.hasError) res  // fewer error at one place
+    else if (res.isLatent) force(res.latenInfo, heap, pos)
+    else Res()
+  }
+
+  def checkParams(valInfos: List[ValueInfo], paramInfos: List[Type], env: Env, positions: List[Position])(implicit ctx: Context): Res = {
+    def paramState(index: Int) = Analyzer.typeState(paramInfos(index))
+
+    valInfos.zipWithIndex.foreach { case (valInfo, index) =>
+      if (valInfo.isLatent && valInfo.isMethod) {
+        val res = force(valInfo, env.heap, positions(index))
+        if (res.hasErrors && valInfo.state < paramState(index)) return res   // report fewer error at one place
+      }
+      else if (valInfo.state < paramState(index))
+        return Res(effects = Vector(Generic("Leak of object under initialization", positions(index))))
+    }
+
+    Res()
+  }
+
   def checkApply(tree: tpd.Tree, fun: Tree, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
-    val res1 = apply(fun, env)
+    val funRes = apply(fun, env)
+
+    // reduce reported errors
+    if (funRes.hasErrors) return Res(effects = funRes.effects)
 
     val args = argss.flatten
     val paramInfos = fun.tpe.widen.paramInfoss.flatten
-    val (res2, valueInfos) = checkParams(fun.symbol, paramInfos, args, env, force = !res1.isLatent)
 
-    var effs = res1.effects ++ res2.effects
-
-    if (res1.isLatent) {
-      indentedDebug(s">>> calling ${fun.symbol}")
-      val res3 = res1.force(i => valueInfos(i), env.heap)
-      if (res3.effects.nonEmpty) effs = effs :+ Latent(tree, res3.effects)
-
-      res3.copy(effects = effs)
+    // check params
+    var effs = Vector.empty[Effect]
+    val valInfos = args.map { arg =>
+      val res = apply(arg, env)
+      effs = effs :+ res.effects
+      ValueInfo(res.state, res.latentInfo)
     }
-    else Res(effects = effs)
+
+    if (effs.size > 0) return Res(effects = effs)
+
+    if (funRes.isLatent) {
+      indentedDebug(s">>> calling ${fun.symbol}")
+      funRes.latentInfo.asMethod(valueInfos, , env.heap)
+    }
+    else checkParams(valInfos, paramInfos, env, args.map(_.pos))
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
     val prefixRes = apply(tree.qualifier, env)
 
-    val res = Rules.select(prefixRes, tree.symbol, env.heap, tree.pos)
-    res ++= prefixRes.effects
+    // reduce reported errors
+    if (prefixRes.hasErrors) return Res(effects = prefixRes.effects)
 
-    res
+    Rules.select(prefixRes, tree.symbol, env.heap, tree.pos)
   }
 
   def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp match {
@@ -394,7 +418,7 @@ class Analyzer {
       else Res()
     case tp @ TermRef(prefix, _) =>
       val res = checkRef(prefix, env, pos)
-      res.select(tp.symbol, env.heap, pos)
+      Rules.select(res, tp.symbol, env.heap, pos)
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
       if (env.contains(sym)) Res(latenInfo = env(cls).latenInfo)
@@ -410,15 +434,16 @@ class Analyzer {
   def checkIf(tree: If, env: Env)(implicit ctx: Context): Res = {
     val If(cond, thenp, elsep) = tree
 
-    val res1: Res = apply(cond, env)
+    val condRes: Res = apply(cond, env)
 
     val envClone = env.deepClone
-    val res2: Res = apply(thenp, env)
-    val res3: Res = apply(elsep, envClone)
+    val thenRes: Res = apply(thenp, env)
+    val elseRes: Res = apply(elsep, envClone)
 
     env.heap.join(envClone.heap)
 
-    res2.copy(effects = res1.effects ++ res2.effects).join(res3)
+    thenRes ++= condRes.effects
+    thenRes.join(elseRes)
   }
 
   def checkValDef(vdef: ValDef, env: Env)(implicit ctx: Context): Res = {
@@ -450,7 +475,6 @@ class Analyzer {
     res2.copy(effects = res1.effects ++ res2.effects)
   }
 
-  // TODO: method call should compute fix point
   protected var _methChecking: Set[Symbol] = Set()
   def isChecking(sym: Symbol)   = _methChecking.contains(sym)
   def checking[T](sym: Symbol)(fn: => T) = {
@@ -484,7 +508,7 @@ class Analyzer {
         val env = Analyzer.setupConstructorEnv(outerEnv, tdef.symbol, tmpl, this, static = true)
 
         val res = apply(tmpl, outerEnv)(ctx.withOwner(tdef.symbol))
-        Res(latenInfo = Analyzer.objectInfo(env.id, static = true), effects = res.effects)
+        Res(latenInfo = Analyzer.objectInfo(env.id, static = true), effects = res.effects, state = State.Filled)
       }
     }
     env.add(tdef.symbol.primaryConstructor, SymInfo(latentInfo = latent))
