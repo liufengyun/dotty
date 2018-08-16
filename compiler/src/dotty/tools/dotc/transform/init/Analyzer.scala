@@ -524,7 +524,10 @@ class Analyzer {
         true
     }
 
-    // TODO: (1) handle params to init; (2) handle parent calls;
+    // TODO
+    //   - handle params to init
+    //   - handle parent calls
+    //   - handle 2nd constructor
     val latent = MethodInfo { (valInfoFn, heap) =>
       if (isChecking(tdef.symbol)) {
         debug(s"recursive creation of ${tdef.symbol} found during initialization of ${env.currentClass}")
@@ -534,11 +537,11 @@ class Analyzer {
         val outerEnv = heap(env.id)
         val env = Analyzer.setupConstructorEnv(outerEnv, tdef.symbol, tmpl, this, static = true)
 
-        apply(tmpl, outerEnv)(ctx.withOwner(tdef.symbol))
-        Res(latenInfo = Analyzer.objectInfo(env.id, static = true))
+        val res = apply(tmpl, outerEnv)(ctx.withOwner(tdef.symbol))
+        Res(latenInfo = Analyzer.objectInfo(env.id, static = true), effects = res.effects)
       }
     }
-    env(tdef.symbol) = SymInfo(latentInfo = latent)
+    env(tdef.symbol.primaryConstructor) = SymInfo(latentInfo = latent)
   }
 
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
