@@ -139,21 +139,27 @@ object Rules {
     if (env.contains(sym)) {
       if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
       else if (sym.is(Method)) {
-        var effs = Vector.empty[Effect]
+        val res = selectLocalMethod(env, sym, pos)
 
         if (!sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
-          effs = effs :+ OverrideRisk(sym, pos)
+          res += OverrideRisk(sym, pos)
 
-        val res = selectLocalMethod(env, sym, pos)
-        res ++= effs
         res
       }
-      else selectLocalField(env, sym, pos)
+      else {
+        val res = selectLocalField(env, sym, pos)
+
+        if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
+          res += UseAbstractDef(sym, pos)
+
+        res
+      }
     }
-    else // select on super
+    else { // select on super
       if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
       else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
       else selectFilledField(env, sym, pos)
+    }
 
 
   def selectStatic(env: Env, sym: Symbol, pos: Position): Res =
@@ -162,11 +168,11 @@ object Rules {
       else if (sym.is(Method)) selectLocalMethod(env, sym, pos)
       else selectLocalField(env, sym, pos)
     }
-    else // select on super
+    else { // select on super
       if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
       else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
       else selectFilledField(env, sym, pos)
-
+    }
 
   def selectFilledField(sym: Symbol, pos: Position): Res =
     Res(state = typeState(sym.info))
@@ -190,9 +196,6 @@ object Rules {
 
     var effs = Vector.empty[Effect]
     if (!env.isAssigned(sym)) effs = effs :+ Uninit(sym, pos)
-
-    if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
-      effs = effs :+ UseAbstractDef(sym, pos)
 
     Res(effects = effs, state = symInfo.state, latenInfo = symInfo.latentInfo)
   }
