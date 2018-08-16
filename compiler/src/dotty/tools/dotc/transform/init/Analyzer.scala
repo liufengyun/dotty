@@ -133,7 +133,7 @@ object Analyzer {
 
 object Rules {
   def selectDynamic(env: Env, sym: Symbol, pos: Position): Res =
-    if (env.contains(sym)) {
+    if (env.contains(sym)) { // TODO: selection on self annotation
       if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
       else if (sym.is(Method)) {
         val res = selectLocalMethod(env, sym, pos)
@@ -143,6 +143,7 @@ object Rules {
 
         res
       }
+      else if (sym.isClass) selectLocalClass(env, sym, pos)
       else {
         val res = selectLocalField(env, sym, pos)
 
@@ -155,21 +156,29 @@ object Rules {
     else { // select on super
       if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
       else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
+      else if (sym.isClass) selectFilledClass(env, sym, pos)
       else selectFilledField(env, sym, pos)
     }
 
-
   def selectStatic(env: Env, sym: Symbol, pos: Position): Res =
-    if (env.contains(sym)) {
+    if (env.contains(sym)) { // TODO: selection on self annotation
       if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
       else if (sym.is(Method)) selectLocalMethod(env, sym, pos)
+      else if (sym.isClass) selectLocalClass(env, sym, pos)
       else selectLocalField(env, sym, pos)
     }
     else { // select on super
       if (sym.is(Lazy)) selectFilledLazy(env, sym, pos)
       else if (sym.is(Method)) selectFilledMethod(env, sym, pos)
+      else if (sym.isClass) selectFilledClass(env, sym, pos)
       else selectFilledField(env, sym, pos)
     }
+
+  def selectFilledClass(env: Env, sym: Symbol, pos: Position): Res =
+    if (isFilled(sym) || isPartial(sym))
+      Res(latentInfo = env(sym))
+    else
+      Res(effects = Vector(Generic(s"Annotate the nested $sym with `@partial` or `@filled`", pos)))
 
   def selectFilledField(sym: Symbol, pos: Position): Res =
     Res(state = typeState(sym.info))
@@ -187,6 +196,9 @@ object Rules {
       Res(state = typeState(sym.info.widenExpr))
     }
     else Res()
+
+  def selectLocalClass(env: Env, sym: Symbol, pos: Position): Res =
+    Res(latentInfo = env(sym))
 
   def selectLocalField(env: Env, sym: Symbol, pos: Position): Res = {
     val symInfo = env(sym)
@@ -223,7 +235,8 @@ object Rules {
   }
 
   def select(res: Res, sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
-    if (res.isLatent) {
+    if (res.hasErrors) res
+    else if (res.isLatent) {
       if (res.latentInfo.isObject) res.latentInfo.asObject.select(sym, heap, pos)
       else {
         assert(sym.name.toString == "apply")
@@ -240,12 +253,17 @@ object Rules {
           if (!Analyzer.isPartial(sym))
             res += Generic("The lazy field should be marked as `@partial` in order to be accessed", pos)
         }
+        else if (sym.isClass) {
+          if (!Analyzer.isPartial(sym))
+            res += Generic(s"The nested $sym should be marked as `@partial` in order to be instantiated", pos)
+        }
         else {
           if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
             res += Generic("Cannot access fields on a partial object", pos)
         }
 
-        res.copy(state = State.Full) // don't report same error message again
+        // set state to Full, don't report same error message again
+        Res(state = State.Full, effects = res.effects)
       }
       else if (res.isFilled) {
         if (sym.is(Method)) {
@@ -260,6 +278,10 @@ object Rules {
 
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
+        else if (sym.isClass) {
+          if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
+            res += Generic(s"The nested $sym should be marked as `@partial` or `@filled` in order to be instantiated", pos)
+        }
         else {
           if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
             res += Generic("Cannot access fields on a partial object", pos)
@@ -267,7 +289,7 @@ object Rules {
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
       }
-      else Res(effects = res.effects)
+      else Res()
     }
   }
 }
@@ -320,29 +342,34 @@ class Analyzer {
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[tpd.Tree]], env: Env)(implicit ctx: Context): Res = {
+    val prefixRes = checkRef(tref.prefix, env, tree.pos)
+    val clsRes = Rules.select(prefixRes, sym, heap, pos)
+
+    if (clsRes.hasErrors) return clsRes
+
     val paramInfos = init.widen.paramInfoss.flatten
     val args = argss.flatten
 
-    val (res1, _) = checkParams(tref.symbol, paramInfos, args, env, force = true)
-
-    if (tref.symbol == env.currentClass) {
-      res1 += RecCreate(tref.symbol, tree)
-      return res1
+    // check params
+    var effs = Vector.empty[Effect]
+    val valInfos = args.map { arg =>
+      val res = apply(arg, env)
+      effs = effs :+ res.effects
+      ValueInfo(res.state, res.latentInfo)
     }
 
-    if (!(localRef(tref, env).exists)) return res1
+    if (effs.size > 0) return Res(effects = effs)
 
-    if (!isLexicalRef(tref, env)) {
-      if (isPartial(tref.prefix, env) && !isSafeVirtualAccess(tref, env))
-        res1 += PartialNew(tref.prefix, tref.symbol, tree.pos)
-      res1
+    if (clsRes.isLatent) {
+      indentedDebug(s">>> create new instance ${tref.symbol}")
+      clsRes.latentInfo(tref.symbol).asMethod(valInfos, env.heap)
     }
     else {
-      indentedDebug(s">>> create new instance ${tref.symbol}")
-      val latentInfo = env.latentInfo(tref.symbol).asMethod
-      val res2 = latentInfo(i => null, env.heap)               // TODO: propagate params to init
-      if (res2.effects.nonEmpty && !ctx.owner.is(Synthetic)) res2 += Instantiate(tref.symbol, res2.effects, tree.pos)
-      res2
+      val paramRes = checkParams(valInfos, paramInfos, env, args.map(_.pos))
+      if (paramRes.hasErrors) return paramRes
+
+      if (!prefixRes.isFull || valInfos.exists(v => !v.isFull)) Res(state = State.Filled)
+      else Res(state = State.Full)
     }
   }
 
@@ -393,7 +420,7 @@ class Analyzer {
 
     if (funRes.isLatent) {
       indentedDebug(s">>> calling ${fun.symbol}")
-      funRes.latentInfo.asMethod(valueInfos, , env.heap)
+      funRes.latentInfo.asMethod(valueInfos, env.heap)
     }
     else checkParams(valInfos, paramInfos, env, args.map(_.pos))
   }
