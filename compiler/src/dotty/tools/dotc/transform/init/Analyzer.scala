@@ -54,11 +54,20 @@ object Analyzer {
     env
   }
 
-  def objectInfo(id: Int, static: Boolean = false) = ObjectInfo {
-    (sym: Symbol, heap: Heap, pos: Position) =>
-      if (static) Rules.selectStatic(heap(env.id), sym)
-      else Rules.selectDynamic(heap(env.id), sym)
-  }
+  def objectInfo(id: Int, static: Boolean = false) =
+    ObjectInfo(
+      { (sym: Symbol, heap: Heap, pos: Position) =>
+        if (static) Rules.selectStatic(heap(env.id), sym)
+        else Rules.selectDynamic(heap(env.id), sym)
+      },
+      { (sym: Symbol, valInfo: ValueInfo) =>
+        heap(env.id)(sym) = SymInfo(
+          assigned = true,
+          state = valInfo.state,
+          latentInfo = valInfo.latenInfo
+        )
+      }
+    )
 
   def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: Template, analyzer: Analyzer, static: Boolean = false)(implicit ctx: Context) = {
     val env = outerEnv.newEnv
@@ -379,7 +388,7 @@ class Analyzer {
       return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
 
     val res = latentInfo.asMethod(i => ValueInfo(), heap)
-    if (res.hasError) res  // fewer error at one place
+    if (res.hasErrors) res  // fewer error at one place
     else if (res.isLatent) force(res.latenInfo, heap, pos)
     else Res()
   }
@@ -493,11 +502,11 @@ class Analyzer {
     }
 
   def checkBlock(tree: Block, env: Env)(implicit ctx: Context): Res = {
-    val env2 = env.heap.newEnv(env.id)
-    indexStats(tree.stats, env2)
+    val newEnv = env.newEnv
+    indexStats(tree.stats, newEnv)
 
-    val res1 = checkStats(tree.stats, env2)
-    val res2 = apply(tree.expr, env2)
+    val res1 = checkStats(tree.stats, newEnv)
+    val res2 = apply(tree.expr, newEnv)
 
     res2.copy(effects = res1.effects ++ res2.effects)
   }
@@ -578,6 +587,46 @@ class Analyzer {
     case _ =>
   }
 
+  def checkAssign(lhs: Tree, rhs: Tree, env: Env)(implicit ctx: Context) = {
+      val rhsRes = apply(rhs, env)
+      if (rhsRes.hasErrors) return rhsRes
+
+      // val resLhs = apply(prefix, env)
+      // if (resLhs.hasErrors) return resLhs
+
+      def check(prefixRes: Res, sym: Symbol): Res = {
+        if (prefixRes.hasErrors) return prefixRes
+        if (prefixRes.state == State.Full) {
+          if (!rhsRes.isFull)
+            return Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", rhs.pos)))
+        }
+        else if (prefixRes.state == State.Filled) {
+          if (rhsRes.state < typeState(sym.info))
+            return Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", rhs.pos)))
+        }
+        else { // assign to partial is fine
+          if (prefixRes.isLatent)
+            prefixRes.assign(sym, ValueInfo(state = rhsRes.state, latentInfo = rhsRes.latenInfo))
+        }
+
+        Res()
+      }
+
+      lhs match {
+        case ident @ Ident(_) =>
+          ident.tpe match {
+            case tp @ TermRef(NoPrefix, _) =>
+              env(tp.symbol) = SymInfo(assigned = true, state = rhsRes.state, latentInfo = rhsRes.latentInfo)
+            case tp @ TermRef(prefix, _) =>
+              val prefixRes = checkRef(prefix)
+              check(prefixRes, tp.symbol)
+          }
+        case sel @ Select(qual, _) =>
+          val prefixRes = apply(qual, env)
+          check(prefixRes, sel.symbol)
+      }
+  }
+
   def apply(tree: Tree, env: Env)(implicit ctx: Context): Res = trace("checking " + tree.show, env)(tree match {
     case tmpl: Template =>
       // TODO: check parents
@@ -603,27 +652,8 @@ class Analyzer {
       checkApply(tree, fn, vargss, env)
     case tree @ NewEx(tref, init, argss) =>
       checkNew(tree, tref, init, argss, env)
-    case tree @ Assign(lhs @ (Ident(_) | Select(This(_), _)), rhs) =>
-      val resRhs = apply(rhs, env)
-
-      if (!resRhs.isPartial || env.isPartial(lhs.symbol) || env.isNotInit(lhs.symbol)) {
-        if (env.isNotInit(lhs.symbol)) env.addInit(lhs.symbol)
-        if (!resRhs.isPartial) env.removePartial(lhs.symbol)
-        else env.addPartial(lhs.symbol)
-      }
-      else resRhs += CrossAssign(lhs, rhs)
-
-      resRhs.copy(partial = false, latentInfo = null)
-    case tree @ Assign(lhs @ Select(prefix, _), rhs) =>
-      val resLhs = apply(prefix, env)
-      val resRhs = apply(rhs, env)
-
-      val res = Res(effects = resLhs.effects ++ resRhs.effects)
-
-      if (resRhs.isPartial && !resLhs.isPartial)
-        res += CrossAssign(lhs, rhs)
-
-      res
+    case tree @ Assign(lhs, rhs) =>
+      checkAssign(lhs, rhs, env)
     case tree @ Block(stats, expr) =>
       checkBlock(tree, env)
     case Typed(expr, tpd) =>

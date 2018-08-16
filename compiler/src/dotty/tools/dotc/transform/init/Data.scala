@@ -115,9 +115,7 @@ case class MethodInfo(fun: (Int => ValueInfo, Heap) => Res) extends LatentInfo {
   def apply(valInfoFn: Int => ValueInfo, heap: Heap): Res = fun(valInfoFn, heap)
 }
 
-case class ObjectInfo(fun: (Symbol, Heap, Position) => Res) extends LatentInfo {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = fun(sym, heap, pos)
-}
+case class ObjectInfo(select: (Symbol, Heap, Position) => Res, assign: (Symbol, ValueInfo) => Unit) extends LatentInfo
 
 //=======================================
 //           Heap / Env
