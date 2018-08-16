@@ -251,12 +251,15 @@ object Rules {
           if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
             res += Generic("Cannot access fields on a partial object", pos)
         }
+
+        res.copy(state = State.Full) // don't report same error message again
       }
       else if (res.isFilled) {
         if (sym.is(Method)) {
           if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
             res += Generic("The method should be marked as `@partial` or `@filled` in order to be called", pos)
-          res
+
+          Res(state = State.Full, effects = res.effects)
         }
         else if (sym.is(Lazy)) {
           if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
@@ -270,8 +273,9 @@ object Rules {
 
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
+      }
+      else Res(effects = res.effects)
     }
-    else Res()
   }
 }
 
