@@ -26,7 +26,7 @@ sealed trait Effect {
     case Uninit(sym, pos)         =>
       ctx.warning(s"Reference to uninitialized value `${sym.name}`", pos)
     case OverrideRisk(sym, pos)     =>
-      ctx.warning(s"`@scala.annotation.init` is recommended for $sym for safe overriding", sym.pos)
+      ctx.warning(s"`@partial` or `@filled` is recommended for $sym for safe overriding", sym.pos)
       ctx.warning(s"Reference to $sym which could be overriden", pos)
     case Call(sym, effects, pos)  =>
       ctx.warning(s"The call to `${sym.name}` causes initialization problem", pos)
