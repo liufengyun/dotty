@@ -69,40 +69,6 @@ object Analyzer {
         )
       }
     )
-
-  /*
-  def setupMethodEnv(env: FreshEnv, cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
-    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
-
-    var noninit = Set[Symbol]()    // definitions that are not initialized
-    var partial = Set[Symbol]()    // definitions that are partial initialized
-
-    // partial fields of current class
-    for (param <- accessors if isPartial(param)) partial += param
-
-    // partial fields of super class
-    for (
-      parent <- cls.baseClasses.tail;
-      decl <- parent.info.decls.toList
-      if isConcreteField(decl) && isPartial(decl)
-    )
-    partial += decl
-
-    // non-initialized fields of current class
-    if (cls.is(Trait))
-      for (decl <- cls.info.decls.toList if isField(decl))
-      noninit += decl
-    else if (isOverriding)
-      for (decl <- cls.info.decls.toList if isNonParamField(decl))
-      noninit += decl
-
-    env.setNonInit(noninit)
-    env.setPartialSyms(partial)
-    env.setLocals(noninit ++ partial)
-  } */
-
-  // TODO: default methods are not necessarily safe, if they call other methods
-  def isDefaultGetter(sym: Symbol)(implicit ctx: Context) = sym.name.is(NameKinds.DefaultGetterName)
 }
 
 object Rules {
@@ -312,9 +278,10 @@ class Analyzer {
 
     if (effs.size > 0) return Res(effects = effs)
 
-    if (clsRes.isLatent) {
+    val constrRes = Rules.select(prefixRes, init.symbol, env.heap, tree.pos)
+    if (constrRes.isLatent) {
       indentedDebug(s">>> create new instance ${tref.symbol}")
-      clsRes.latentInfo.asMethod(valInfos, env.heap)
+      constrRes.latentInfo.asMethod(valInfos, env.heap)
     }
     else {
       val paramRes = checkParams(valInfos, paramInfos, env, args.map(_.pos))
@@ -331,7 +298,7 @@ class Analyzer {
       return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
 
     val res = latentInfo.asMethod(i => ValueInfo(), heap)
-    if (res.hasErrors) res  // fewer error at one place
+    if (res.hasErrors) res  // fewer errors at one place
     else if (res.isLatent) force(res.latentInfo, heap, pos)
     else Res()
   }
@@ -550,9 +517,6 @@ class Analyzer {
   def checkAssign(lhs: Tree, rhs: Tree, env: Env)(implicit ctx: Context): Res = {
       val rhsRes = apply(rhs, env)
       if (rhsRes.hasErrors) return rhsRes
-
-      // val resLhs = apply(prefix, env)
-      // if (resLhs.hasErrors) return resLhs
 
       def check(prefixRes: Res, sym: Symbol): Res = {
         if (prefixRes.hasErrors) return prefixRes
