@@ -301,7 +301,9 @@ class Analyzer {
     if (env.contains(init.symbol)) {
       val constrInfo =  env(init.symbol)
       indentedDebug(s">>> create new instance $cls")
-      constrInfo.latentInfo.asMethod(valInfos, env.heap)
+      val res = constrInfo.latentInfo.asMethod(valInfos, env.heap)
+      if (res.hasErrors) res.effects = Vector(Instantiate(cls, res.effects, tree.pos))
+      res
     }
     else {
       val paramRes = checkParams(cls, valInfos, paramInfos, env, args.map(_.pos))
@@ -390,7 +392,7 @@ class Analyzer {
       Rules.select(res, tp.symbol, env.heap, pos)
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
-      if (cls.is(Package)) Res()
+      if (cls.is(Package)) Res() // Dotty represents package path by ThisType
       else {
         val symInfo = env(cls)
         Res(latentInfo = symInfo.latentInfo, state = symInfo.state)
