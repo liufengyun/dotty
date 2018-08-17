@@ -169,6 +169,10 @@ class Heap extends Cloneable {
 }
 
 class State(val state: Int) extends AnyVal {
+  def isPartial = this == State.Partial
+  def isFilled  = this == State.Filled
+  def isFull    = this == State.Full
+
   def join(other: State): State = new State(Math.min(state, other.state))
 
   def <(other: State): Boolean = this.state < other.state
@@ -178,29 +182,42 @@ object State {
   val Partial = new State(1)
   val Filled  = new State(2)
   val Full    = new State(3)
+
+  def max(s1: State, s2: State): State = new State(Math.max(s1.state, s2.state))
 }
 
 case class ValueInfo(state: State = State.Full, latentInfo: LatentInfo = NoLatent) {
-  def isPartial = state == State.Partial
-  def isFilled  = state == State.Filled
-  def isFull    = state == State.Full
+  def isPartial = state.isPartial
+  def isFilled  = state.isFilled
+  def isFull    = state.isFull
 
   def isLatent  = latentInfo != NoLatent
 }
 
-case class SymInfo(assigned: Boolean = false, forced: Boolean = false, state: State = State.Full, latentInfo: LatentInfo = NoLatent) {
-  def isPartial = assigned && state == State.Partial
-  def isFilled  = assigned && state == State.Filled
-  def isFull    = assigned && state == State.Full
+case class SymInfo(assigned: Boolean = true, forced: Boolean = false, state: State = State.Full, latentInfo: LatentInfo = NoLatent) {
+  def isPartial = assigned && state.isPartial
+  def isFilled  = assigned && state.isFilled
+  def isFull    = assigned && state.isFull
 
   def isLatent  = latentInfo != NoLatent
 }
 
 object Env {
-  private var uniqueId = 0
-  def newId: Int = {
-    uniqueId += 1
-    uniqueId
+  private[this] var _uniqueId = 0
+  def uniqueId: Int = {
+    _uniqueId += 1
+    _uniqueId
+  }
+
+  def createRootEnv: Env = {
+    val heap = new Heap
+
+    val env = new Env(-1) {
+      override def contains(sym: Symbol): Boolean = _syms.contains(sym)
+    }
+
+    heap.addEnv(env)
+    env
   }
 }
 
@@ -216,6 +233,8 @@ object Env {
 class Env(val outerId: Int) extends Cloneable {
   val id: Int = Env.uniqueId
 
+  assert(outerId != id)
+
   var heap: Heap = null
 
   protected var _syms: Map[Symbol, SymInfo] = Map()
@@ -230,7 +249,7 @@ class Env(val outerId: Int) extends Cloneable {
   }
 
   def newEnv(heap: Heap = this.heap): Env = {
-    val env = new Env(outerId)
+    val env = new Env(this.id)
     heap.addEnv(env)
     env
   }
@@ -244,9 +263,10 @@ class Env(val outerId: Int) extends Cloneable {
 
   def contains(sym: Symbol): Boolean = _syms.contains(sym) || outer.contains(sym)
 
-  def apply(sym: Symbol): SymInfo =
+  def apply(sym: Symbol): SymInfo = {
     if (_syms.contains(sym)) _syms(sym)
     else outer(sym)
+  }
 
   def setState(sym: Symbol, state: State): Unit =
     if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(state = state))
@@ -312,7 +332,7 @@ class Env(val outerId: Int) extends Cloneable {
 
   override def toString: String =
     (if (outerId > 0) outer.toString + "\n" else "") ++
-    s"""~ -------------------------------------
+    s"""~ --------------$id($outerId)-----------------------
         ~ | locals:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
         ~ | partial: ${partialSyms}

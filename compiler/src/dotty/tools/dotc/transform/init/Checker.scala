@@ -129,12 +129,12 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val analyzer = new Analyzer
 
     // current class env needs special setup
-    val root = Analyzer.createRootEnv
+    val root = Env.createRootEnv
 
     // create a custom ObjectInfo for `this`, which implements special rules about member selection
     val env = setupConstructorEnv(root, cls, tree, analyzer)
 
-    val res = analyzer.checkStats(tree.body, root)
+    val res = analyzer.checkStats(tree.body, env)
 
     res.effects.foreach(_.report)
     env.notAssigned.foreach { sym =>
@@ -144,17 +144,19 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     tree
   }
 
-  def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer, static: Boolean = false)(implicit ctx: Context) = {
+  def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
     val env = outerEnv.newEnv()
-    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
 
+    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
     for (param <- accessors)
       env.add(param, SymInfo(assigned = true, state = Analyzer.typeState(param.info)))
 
     analyzer.indexStats(tmpl.body, env)
 
-    val thisInfo =  Analyzer.objectInfo(env.id, cls.isEffectivelyFinal || static)
+    val thisInfo = Analyzer.objectInfo(env.id, cls.isEffectivelyFinal)
+
     outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
+    Analyzer.addOuterThis(cls, outerEnv)
 
     env
   }

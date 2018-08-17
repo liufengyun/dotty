@@ -38,6 +38,11 @@ object Analyzer {
     else if (isFilled(tp)) State.Filled
     else State.Full
 
+  def symbolState(sym: Symbol)(implicit ctx: Context) =
+    if (isPartial(sym)) State.Partial
+    else if (isFilled(sym)) State.Filled
+    else State.Full
+
   def isConcreteField(sym: Symbol)(implicit ctx: Context) =
     sym.isTerm && sym.is(AnyFlags, butNot = Deferred | Method | Local | Private)
 
@@ -47,11 +52,22 @@ object Analyzer {
   def isField(sym: Symbol)(implicit ctx: Context) =
     sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
 
-  def createRootEnv: Env = {
-    val heap = new Heap
-    val env = new Env(-1)
-    heap.addEnv(env)
-    env
+  def addOuterThis(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
+    def recur(cls: Symbol, maxState: State): Unit = {
+      val outerState = symbolState(cls)
+
+      if (!cls.owner.isClass || maxState.isFull) {
+        env.add(cls.owner.enclosingClass, SymInfo(state = State.Full))
+        if (cls.owner.exists)
+          recur(cls.owner.enclosingClass, State.Full)
+      }
+      else {
+        env.add(cls.owner.enclosingClass, SymInfo(state = State.max(outerState, maxState)))
+        if (cls.owner.exists)
+          recur(cls.owner.enclosingClass, State.max(outerState, maxState))
+      }
+    }
+    recur(cls, State.Partial)
   }
 
   // TODO: should we pass context as function arguments?
@@ -367,8 +383,8 @@ class Analyzer {
       Rules.select(res, tp.symbol, env.heap, pos)
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
-      if (env.contains(cls)) Res(latentInfo = env(cls).latentInfo)
-      else Res() // TODO: all outer `this` should be in environment
+      if (cls.is(Package)) Res()
+      else Res(latentInfo = env(cls).latentInfo)
     case tp @ SuperType(thistpe, supertpe) =>
       // TODO : handle `supertpe`
       checkRef(thistpe, env, pos)
@@ -542,8 +558,13 @@ class Analyzer {
         case ident @ Ident(_) =>
           ident.tpe match {
             case tp @ TermRef(NoPrefix, _) =>
-              env(tp.symbol) = SymInfo(assigned = true, state = rhsRes.state, latentInfo = rhsRes.latentInfo)
-              Res()
+              if (env.contains(tp.symbol)) {
+                env(tp.symbol) = SymInfo(assigned = true, state = rhsRes.state, latentInfo = rhsRes.latentInfo)
+                Res()
+              }
+              else if (!rhsRes.isFull) // leak assign
+                Res(effects = Vector(Generic("Cannot leak an object under initialization", rhs.pos)))
+              else Res()
             case tp @ TermRef(prefix, _) =>
               val prefixRes = checkRef(prefix, env, rhs.pos)
               check(prefixRes, tp.symbol)
