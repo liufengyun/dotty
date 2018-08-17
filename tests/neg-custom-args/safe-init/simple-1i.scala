@@ -1,5 +1,5 @@
-class Foo(n: String @scala.annotation.partial) {
-  foo(new Foo("Jack"))        // error: recursive creation
+class Foo(n: Partial[String]) {
+  foo(new Foo("Jack"))        // recursive creation
 
   val name: String = n
   name.length                 // error

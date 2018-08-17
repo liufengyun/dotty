@@ -8,7 +8,7 @@ class Foo(x: Partial[String]) {
   val y = name
   y.size
 
-  name = x   // error
+  name = x
 }
 
 class Bar(x: Partial[String]) {
@@ -18,5 +18,5 @@ class Bar(x: Partial[String]) {
   name = "hello, world"
   name.size
 
-  name = x   // error
+  name = x
 }

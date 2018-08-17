@@ -5,7 +5,7 @@ object Flags {
 
   new Flags.Inner         // error
 
-  val a = Flags.b + 3     // error
+  val a = this.b + 3     // error
   val b = 5
 }
 

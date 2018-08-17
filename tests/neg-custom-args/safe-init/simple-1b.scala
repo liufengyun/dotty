@@ -6,7 +6,7 @@ class Box(x: Int) {
 
   var a = "hello"
 
-  def f(m: Int) = m + a.size  // error  // error
+  def f(m: Int) = m + a.size  // error
 }
 
 import scala.annotation.init

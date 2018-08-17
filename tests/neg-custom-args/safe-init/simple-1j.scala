@@ -1,5 +1,4 @@
 object Flags {
-  @scala.annotation.init
   case class FlagSet(val bits: Long) {
     println(JavaStaticTerm)                        // error
     def toTermFlags = if (bits == 0) this else FlagSet(bits & ~KINDFLAGS | TERMS)
