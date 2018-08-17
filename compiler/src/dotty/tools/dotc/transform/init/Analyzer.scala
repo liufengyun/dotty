@@ -187,7 +187,9 @@ object Rules {
       env.setForced(sym)
       val res = symInfo.latentInfo.asMethod.apply(i => null, env.heap)
       env(sym) = symInfo.copy(state = res.state, latentInfo = res.latentInfo)
-      Res()
+
+      if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
+      else Res()
     }
     else Res(state = symInfo.state, latentInfo = symInfo.latentInfo)
   }
