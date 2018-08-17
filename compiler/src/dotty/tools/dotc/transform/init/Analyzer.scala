@@ -206,11 +206,11 @@ object Rules {
       if (res.isPartial) {
         if (sym.is(Method)) {
           if (!Analyzer.isPartial(sym))
-            res += Generic("The method should be marked as `@partial` in order to be called", pos)
+            res += Generic(s"The $sym should be marked as `@partial` in order to be called", pos)
         }
         else if (sym.is(Lazy)) {
           if (!Analyzer.isPartial(sym))
-            res += Generic("The lazy field should be marked as `@partial` in order to be accessed", pos)
+            res += Generic(s"The lazy field $sym should be marked as `@partial` in order to be accessed", pos)
         }
         else if (sym.isClass) {
           if (!Analyzer.isPartial(sym))
@@ -218,7 +218,7 @@ object Rules {
         }
         else {
           if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
-            res += Generic("Cannot access fields on a partial object", pos)
+            res += Generic(s"Cannot access field $sym on a partial object", pos)
         }
 
         // set state to Full, don't report same error message again
@@ -227,13 +227,13 @@ object Rules {
       else if (res.isFilled) {
         if (sym.is(Method)) {
           if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
-            res += Generic("The method should be marked as `@partial` or `@filled` in order to be called", pos)
+            res += Generic(s"The method $sym should be marked as `@partial` or `@filled` in order to be called", pos)
 
           Res(state = State.Full, effects = res.effects)
         }
         else if (sym.is(Lazy)) {
           if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
-            res += Generic("The lazy field should be marked as `@partial` or `@filled` in order to be accessed", pos)
+            res += Generic(s"The lazy field $sym should be marked as `@partial` or `@filled` in order to be accessed", pos)
 
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
@@ -245,7 +245,7 @@ object Rules {
         }
         else {
           if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
-            res += Generic("Cannot access fields on a partial object", pos)
+            res += Generic(s"Cannot access field $sym on a partial object", pos)
 
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
