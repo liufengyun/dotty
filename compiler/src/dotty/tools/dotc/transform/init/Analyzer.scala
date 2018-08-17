@@ -298,10 +298,10 @@ class Analyzer {
 
     if (effs.size > 0) return Res(effects = effs)
 
-    val constrRes = Rules.select(prefixRes, init.symbol, env.heap, tree.pos)
-    if (constrRes.isLatent) {
+    if (env.contains(init.symbol)) {
+      val constrInfo =  env(init.symbol)
       indentedDebug(s">>> create new instance $cls")
-      constrRes.latentInfo.asMethod(valInfos, env.heap)
+      constrInfo.latentInfo.asMethod(valInfos, env.heap)
     }
     else {
       val paramRes = checkParams(cls, valInfos, paramInfos, env, args.map(_.pos))
@@ -456,10 +456,7 @@ class Analyzer {
     res
   }
 
-  def indexClassDef(tdef: TypeDef, env: Env)(implicit ctx: Context): Unit = {
-    val cls = tdef.symbol
-    val tmpl = tdef.rhs.asInstanceOf[Template]
-
+  def indexConstructors(cls: Symbol, tmpl: Template, env: Env)(implicit ctx: Context): Unit = {
     def nonStaticStats = tmpl.body.filter {
       case vdef : ValDef  =>
         !vdef.symbol.hasAnnotation(defn.ScalaStaticAnnot)
@@ -468,7 +465,6 @@ class Analyzer {
     }
 
     // primary constructor
-    //   - handle 2nd constructor
     val latent = MethodInfo { (valInfoFn, heap) =>
       if (isChecking(cls)) {
         debug(s"recursive creation of $cls found")
@@ -483,12 +479,12 @@ class Analyzer {
           newEnv.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
         }
 
-        indexStats(tmpl.body, newEnv)
+        indexStats(nonStaticStats, newEnv)
 
         val thisInfo =  Analyzer.objectInfo(newEnv.id, static = true)
         outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
 
-        val res = apply(tmpl, outerEnv)(ctx.withOwner(cls))
+        val res = apply(tmpl, newEnv)(ctx.withOwner(cls))
         Res(latentInfo = thisInfo, effects = res.effects, state = State.Filled)
       }
     }
@@ -536,7 +532,7 @@ class Analyzer {
     case vdef: ValDef if Analyzer.isNonParamField(vdef.symbol) =>
       env.add(vdef.symbol, SymInfo(assigned = false))
     case tdef: TypeDef if tdef.isClassDef  =>
-      indexClassDef(tdef, env)
+      indexConstructors(tdef.symbol, tdef.rhs.asInstanceOf[Template], env)
     case _ =>
   }
 
@@ -621,11 +617,11 @@ class Analyzer {
       checkSelect(tree, env)
     case tree: If =>
       checkIf(tree, env)
+    case tree @ NewEx(tref, init, argss) => // must before Apply
+      checkNew(tree, tref, init, argss, env)
     case tree: Apply =>
       val (fn, targs, vargss) = decomposeCall(tree)
       checkApply(tree, fn, vargss, env)
-    case tree @ NewEx(tref, init, argss) =>
-      checkNew(tree, tref, init, argss, env)
     case tree @ Assign(lhs, rhs) =>
       checkAssign(lhs, rhs, env)
     case tree: Block =>
