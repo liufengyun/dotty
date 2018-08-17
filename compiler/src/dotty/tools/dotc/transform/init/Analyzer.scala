@@ -70,26 +70,6 @@ object Analyzer {
       }
     )
 
-  def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer, static: Boolean = false)(implicit ctx: Context) = {
-    val env = outerEnv.newEnv()
-    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
-
-    for (param <- accessors)
-      env.add(param, SymInfo(assigned = true, state = typeState(param.info)))
-
-    // non-initialized fields of current class, state information on them
-    // should be ignored for data-flow analysis.
-    for (decl <- cls.info.decls.toList if isNonParamField(decl))
-      env.add(decl, SymInfo(assigned = false))
-
-    analyzer.indexStats(tmpl.body, env)
-
-    val thisInfo =  objectInfo(env.id, cls.isEffectivelyFinal || static)
-    outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
-
-    env
-  }
-
   /*
   def setupMethodEnv(env: FreshEnv, cls: ClassSymbol, meth: Symbol, isOverriding: Boolean)(implicit ctx: Context) = {
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
@@ -484,6 +464,7 @@ class Analyzer {
   }
 
   def indexClassDef(tdef: TypeDef, env: Env)(implicit ctx: Context): Unit = {
+    val cls = tdef.symbol
     val tmpl = tdef.rhs.asInstanceOf[Template]
 
     def nonStaticStats = tmpl.body.filter {
@@ -493,28 +474,42 @@ class Analyzer {
         true
     }
 
-    // TODO
-    //   - handle params to init
-    //   - handle parent calls
+    // primary constructor
     //   - handle 2nd constructor
     val latent = MethodInfo { (valInfoFn, heap) =>
-      if (isChecking(tdef.symbol)) {
-        debug(s"recursive creation of ${tdef.symbol} found")
+      if (isChecking(cls)) {
+        debug(s"recursive creation of $cls found")
         Res()
       }
-      else checking(tdef.symbol) {
+      else checking(cls) {
         val outerEnv = heap(env.id)
-        val newEnv = Analyzer.setupConstructorEnv(outerEnv, tdef.symbol.asClass, tmpl, this, static = true)
+        val newEnv = outerEnv.newEnv()
 
-        val res = apply(tmpl, outerEnv)(ctx.withOwner(tdef.symbol))
-        Res(latentInfo = Analyzer.objectInfo(newEnv.id, static = true), effects = res.effects, state = State.Filled)
+        tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+          val ValueInfo(state, latentInfo) = valInfoFn(index)
+          newEnv.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
+        }
+
+        indexStats(tmpl.body, newEnv)
+
+        val thisInfo =  Analyzer.objectInfo(newEnv.id, static = true)
+        outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
+
+        val res = apply(tmpl, outerEnv)(ctx.withOwner(cls))
+        Res(latentInfo = thisInfo, effects = res.effects, state = State.Filled)
       }
     }
-    env.add(tdef.symbol.primaryConstructor, SymInfo(latentInfo = latent))
+    env.add(cls.primaryConstructor, SymInfo(latentInfo = latent))
+
+    // TODO: secondary constructor
+    tmpl.body.foreach {
+      case ddef: DefDef if ddef.symbol.isConstructor =>
+      case _ =>
+    }
   }
 
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
-    case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) =>
+    case ddef: DefDef if ddef.symbol.is(AnyFlags, butNot = Accessor) && !ddef.symbol.isConstructor =>
       val latentInfo = MethodInfo { (valInfoFn, heap) =>
         if (isChecking(ddef.symbol)) {
           // TODO: force latent effects on arguments
@@ -545,6 +540,8 @@ class Analyzer {
         }
       }
       env.add(vdef.symbol,  SymInfo(latentInfo = latentInfo))
+    case vdef: ValDef if Analyzer.isNonParamField(vdef.symbol) =>
+      env.add(vdef.symbol, SymInfo(assigned = false))
     case tdef: TypeDef if tdef.isClassDef  =>
       indexClassDef(tdef, env)
     case _ =>
@@ -623,22 +620,22 @@ class Analyzer {
       checkRef(tree.tpe, env, tree.pos)
     case tree: This =>
       checkRef(tree.tpe, env, tree.pos)
-    case tree @ Super(qual, mix) =>
+    case tree: Super =>
       checkRef(tree.tpe, env, tree.pos)
-    case tree @ Select(prefix, _) if tree.symbol.isTerm =>
+    case tree: Select if tree.symbol.isTerm =>
       checkSelect(tree, env)
-    case tree @ If(cond, thenp, elsep) =>
+    case tree: If =>
       checkIf(tree, env)
-    case tree @ Apply(_, _) =>
+    case tree: Apply =>
       val (fn, targs, vargss) = decomposeCall(tree)
       checkApply(tree, fn, vargss, env)
     case tree @ NewEx(tref, init, argss) =>
       checkNew(tree, tref, init, argss, env)
     case tree @ Assign(lhs, rhs) =>
       checkAssign(lhs, rhs, env)
-    case tree @ Block(stats, expr) =>
+    case tree: Block =>
       checkBlock(tree, env)
-    case Typed(expr, tpd) =>
+    case Typed(expr, _) =>
       apply(expr, env)
     case _ =>
       Res()
