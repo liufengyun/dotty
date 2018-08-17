@@ -90,6 +90,7 @@ object Analyzer {
 object Rules {
   def selectDynamic(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res =
     if (env.contains(sym)) { // TODO: selection on self annotation
+      debug("select dynamic-dispatch symbol " + sym)
       if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
       else if (sym.is(Method)) {
         val res = selectLocalMethod(env, sym, pos)
@@ -118,6 +119,7 @@ object Rules {
 
   def selectStatic(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res =
     if (env.contains(sym)) { // TODO: selection on self annotation
+      debug("select static-dispatch symbol " + sym)
       if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
       else if (sym.is(Method)) selectLocalMethod(env, sym, pos)
       else if (sym.isClass) selectLocalClass(env, sym, pos)
@@ -355,7 +357,9 @@ class Analyzer {
 
     if (funRes.isLatent) {
       indentedDebug(s">>> calling ${fun.symbol}")
-      funRes.latentInfo.asMethod(valInfos, env.heap)
+      val res = funRes.latentInfo.asMethod(valInfos, env.heap)
+      if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
+      res
     }
     else checkParams(valInfos, paramInfos, env, args.map(_.pos))
   }

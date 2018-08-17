@@ -153,7 +153,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     analyzer.indexStats(tmpl.body, env)
 
-    val thisInfo = Analyzer.objectInfo(env.id, cls.isEffectivelyFinal)
+    val thisInfo = Analyzer.objectInfo(env.id, static = cls.is(Final))
 
     outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
     Analyzer.addOuterThis(cls, outerEnv)
