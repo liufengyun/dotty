@@ -53,18 +53,17 @@ object Analyzer {
     sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
 
   def addOuterThis(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
-    def recur(cls: Symbol, maxState: State): Unit = {
+    def recur(cls: Symbol, maxState: State): Unit = if (cls.owner.exists) {
       val outerState = symbolState(cls)
+      val enclosingCls = cls.owner.enclosingClass
 
       if (!cls.owner.isClass || maxState.isFull) {
-        env.add(cls.owner.enclosingClass, SymInfo(state = State.Full))
-        if (cls.owner.exists)
-          recur(cls.owner.enclosingClass, State.Full)
+        env.add(enclosingCls, SymInfo(state = State.Full))
+        recur(enclosingCls, State.Full)
       }
       else {
-        env.add(cls.owner.enclosingClass, SymInfo(state = State.max(outerState, maxState)))
-        if (cls.owner.exists)
-          recur(cls.owner.enclosingClass, State.max(outerState, maxState))
+        env.add(enclosingCls, SymInfo(state = State.max(outerState, maxState)))
+        recur(enclosingCls, State.max(outerState, maxState))
       }
     }
     recur(cls, State.Partial)
@@ -280,8 +279,9 @@ class Analyzer {
   def indentedDebug(msg: String) = debug(pad(msg, padFirst = true))
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
+    val cls = tref.classSymbol
     val prefixRes = checkRef(tref.prefix, env, tree.pos)
-    val clsRes = Rules.select(prefixRes, tref.classSymbol, env.heap, tree.pos)
+    val clsRes = Rules.select(prefixRes, cls, env.heap, tree.pos)
 
     if (clsRes.hasErrors) return clsRes
 
@@ -300,11 +300,11 @@ class Analyzer {
 
     val constrRes = Rules.select(prefixRes, init.symbol, env.heap, tree.pos)
     if (constrRes.isLatent) {
-      indentedDebug(s">>> create new instance ${tref.symbol}")
+      indentedDebug(s">>> create new instance $cls")
       constrRes.latentInfo.asMethod(valInfos, env.heap)
     }
     else {
-      val paramRes = checkParams(valInfos, paramInfos, env, args.map(_.pos))
+      val paramRes = checkParams(cls, valInfos, paramInfos, env, args.map(_.pos))
       if (paramRes.hasErrors) return paramRes
 
       if (!prefixRes.isFull || valInfos.exists(v => !v.isFull)) Res(state = State.Filled)
@@ -323,7 +323,7 @@ class Analyzer {
     else Res()
   }
 
-  def checkParams(valInfos: List[ValueInfo], paramInfos: List[Type], env: Env, positions: List[Position])(implicit ctx: Context): Res = {
+  def checkParams(sym: Symbol, valInfos: List[ValueInfo], paramInfos: List[Type], env: Env, positions: List[Position])(implicit ctx: Context): Res = {
     def paramState(index: Int) = Analyzer.typeState(paramInfos(index))
 
     valInfos.zipWithIndex.foreach { case (valInfo, index) =>
@@ -332,13 +332,14 @@ class Analyzer {
         if (res.hasErrors && valInfo.state < paramState(index)) return res   // report fewer error at one place
       }
       else if (valInfo.state < paramState(index))
-        return Res(effects = Vector(Generic("Leak of object under initialization", positions(index))))
+        return Res(effects = Vector(Generic("Leak of object under initialization to " + sym, positions(index))))
     }
 
     Res()
   }
 
   def checkApply(tree: tpd.Tree, fun: Tree, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
+    val funSym = fun.symbol
     val funRes = apply(fun, env)
 
     // reduce reported errors
@@ -358,12 +359,12 @@ class Analyzer {
     if (effs.size > 0) return Res(effects = effs)
 
     if (funRes.isLatent) {
-      indentedDebug(s">>> calling ${fun.symbol}")
+      indentedDebug(s">>> calling $funSym")
       val res = funRes.latentInfo.asMethod(valInfos, env.heap)
       if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
       res
     }
-    else checkParams(valInfos, paramInfos, env, args.map(_.pos))
+    else checkParams(funSym, valInfos, paramInfos, env, args.map(_.pos))
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
@@ -390,7 +391,10 @@ class Analyzer {
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
       if (cls.is(Package)) Res()
-      else Res(latentInfo = env(cls).latentInfo)
+      else {
+        val symInfo = env(cls)
+        Res(latentInfo = symInfo.latentInfo, state = symInfo.state)
+      }
     case tp @ SuperType(thistpe, supertpe) =>
       // TODO : handle `supertpe`
       checkRef(thistpe, env, pos)
@@ -417,7 +421,7 @@ class Analyzer {
   def checkValDef(vdef: ValDef, env: Env)(implicit ctx: Context): Res = {
     val rhsRes = apply(vdef.rhs, env)
 
-    if (!tpd.isWildcardArg(vdef.rhs) && !vdef.rhs.isEmpty)
+    if (!tpd.isWildcardArg(vdef.rhs))
       env.setAssigned(vdef.symbol)     // take `_` as uninitialized, otherwise it's initialized
 
     val symInfo = env(vdef.symbol)
@@ -601,7 +605,7 @@ class Analyzer {
     case tmpl: Template =>
       // TODO: check parents
       checkStats(tmpl.body, env)
-    case vdef : ValDef if !vdef.symbol.is(Lazy) =>
+    case vdef : ValDef if !vdef.symbol.is(Lazy) && !vdef.rhs.isEmpty =>
       checkValDef(vdef, env)
     case _: DefTree =>  // ignore other definitions
       Res()

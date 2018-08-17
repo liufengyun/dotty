@@ -141,6 +141,8 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 
+    debug(env.toString)
+
     tree
   }
 
