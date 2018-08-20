@@ -73,6 +73,7 @@ object Analyzer {
   def objectInfo(id: Int, static: Boolean = false)(implicit ctx: Context) =
     ObjectInfo(
       (sym: Symbol, heap: Heap, pos: Position) => {
+        // println(s"select $sym from:\n" + heap(id).toString)
         if (static) Rules.selectStatic(heap(id), sym, pos)
         else Rules.selectDynamic(heap(id), sym, pos)
       },
@@ -298,10 +299,10 @@ class Analyzer {
 
     if (effs.size > 0) return Res(effects = effs)
 
-    if (env.contains(init.symbol)) {
-      val constrInfo =  env(init.symbol)
+    val initRes = Rules.select(prefixRes, init.symbol, env.heap, tree.pos)
+    if (initRes.isLatent) {
       indentedDebug(s">>> create new instance $cls")
-      val res = constrInfo.latentInfo.asMethod(valInfos, env.heap)
+      val res = initRes.latentInfo.asMethod(valInfos, env.heap)
       if (res.hasErrors) res.effects = Vector(Instantiate(cls, res.effects, tree.pos))
       res
     }
@@ -491,6 +492,7 @@ class Analyzer {
       }
     }
     env.add(cls.primaryConstructor, SymInfo(latentInfo = latent))
+    env.add(cls, SymInfo())
 
     // TODO: secondary constructor
     tmpl.body.foreach {
