@@ -331,7 +331,7 @@ class Analyzer {
     valInfos.zipWithIndex.foreach { case (valInfo, index) =>
       if (valInfo.isLatent && valInfo.latentInfo.isMethod) {
         val res = force(valInfo.latentInfo, env.heap, positions(index))
-        if (res.hasErrors && valInfo.state < paramState(index)) return res   // report fewer error at one place
+        if (res.hasErrors && !paramState(index).isPartial) return res   // report fewer error at one place
       }
       else if (valInfo.state < paramState(index))
         return Res(effects = Vector(Generic("Leak of object under initialization to " + sym, positions(index))))
