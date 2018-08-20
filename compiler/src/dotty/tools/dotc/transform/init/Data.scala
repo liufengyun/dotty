@@ -257,23 +257,6 @@ class Env(val outerId: Int) extends Cloneable {
     if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(state = state))
     else outer.setState(sym, state)
 
-  def isLatent(sym: Symbol): Boolean =
-    if (_syms.contains(sym)) _syms(sym).isLatent
-    else outer.isLatent(sym)
-  def setLatent(sym: Symbol, info: LatentInfo): Unit =
-    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(latentInfo = info))
-    else outer.setLatent(sym, info)
-  def latentInfo(sym: Symbol): LatentInfo =
-    if (_syms.contains(sym)) _syms(sym).latentInfo
-    else outer.latentInfo(sym)
-
-  def isForced(sym: Symbol): Boolean =
-    if (_syms.contains(sym)) _syms(sym).forced
-    else outer.isForced(sym)
-  def setForced(sym: Symbol): Unit =
-    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(forced = true))
-    else outer.setForced(sym)
-
   def isAssigned(sym: Symbol): Boolean =
     if (_syms.contains(sym)) _syms(sym).assigned
     else outer.isAssigned(sym)
@@ -304,7 +287,7 @@ class Env(val outerId: Int) extends Cloneable {
         _syms = _syms.updated(
           sym,
           info.copy(
-            assigned   =  false,
+            assigned   =  true,
             forced     =  info.forced || info2.forced,
             state      =  info.state.join(info2.state),
             latentInfo =  info.latentInfo.join(info2.latentInfo)
