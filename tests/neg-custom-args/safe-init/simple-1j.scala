@@ -1,7 +1,9 @@
 object Flags {
   case class FlagSet(val bits: Long) {
-    println(JavaStaticTerm)                        // error
-    def toTermFlags = if (bits == 0) this else FlagSet(bits & ~KINDFLAGS | TERMS)
+    def toTermFlags = if (bits == 0) this else {
+      println(size)                               // eror
+      FlagSet(bits & ~KINDFLAGS | TERMS)
+    }
   }
 
   private val flagName = Array.fill(64, 2)("")
@@ -15,9 +17,11 @@ object Flags {
   private def commonFlag(index: Int, name: String): FlagSet = {
     flagName(index)(TERMindex) = name
     flagName(index)(TYPEindex) = name
-    FlagSet(TERMS | TYPES | (1L << index))           // error
+    FlagSet(TERMS | TYPES | (1L << index))
   }
 
-  final val JavaStatic = commonFlag(31, "<static>")  // error
+  final val JavaStatic = commonFlag(31, "<static>")
   final val JavaStaticTerm = JavaStatic.toTermFlags  // error
+
+  final val size: Int = ???
 }

@@ -21,8 +21,6 @@ import collection.mutable
 
 sealed trait Effect {
   def report(implicit ctx: Context): Unit = this match {
-    case Member(sym, obj, pos)    =>
-      ctx.warning(s"Select $sym on partial value ${obj.show}", pos)
     case Uninit(sym, pos)         =>
       ctx.warning(s"Reference to uninitialized value `${sym.name}`", pos)
     case OverrideRisk(sym, pos)     =>
@@ -34,23 +32,15 @@ sealed trait Effect {
     case Force(sym, effects, pos) =>
       ctx.warning(s"Forcing lazy val `${sym.name}` causes initialization problem", pos)
       effects.foreach(_.report)
-    case Argument(sym, arg)       =>
-      ctx.warning(s"Use partial value ${arg.show} as a full value to ${sym.show}", arg.pos)
-    case CrossAssign(lhs, rhs)    =>
-      ctx.warning(s"Assign partial value to a non-partial value", rhs.pos)
-    case PartialNew(prefix, cls, pos)  =>
-      ctx.warning(s"Cannot create $cls because the prefix `${prefix.show}` is partial", pos)
     case Instantiate(cls, effs, pos)  =>
       ctx.warning(s"Create instance results in initialization errors", pos)
       effs.foreach(_.report)
     case UseAbstractDef(sym, pos)  =>
-        ctx.warning(s"`@scala.annotation.init` is recommended for abstract $sym for safe initialization", sym.pos)
-        ctx.warning(s"Reference to abstract $sym which should be annotated with `@scala.annotation.init`", pos)
+      ctx.warning(s"`@scala.annotation.init` is recommended for abstract $sym for safe initialization", sym.pos)
+      ctx.warning(s"Reference to abstract $sym which should be annotated with `@scala.annotation.init`", pos)
     case Latent(tree, effs)  =>
-      effs.foreach(_.report)
       ctx.warning(s"Latent effects results in initialization errors", tree.pos)
-    case RecCreate(cls, tree) =>
-      ctx.warning(s"Possible recursive creation of instance for ${cls.show}", tree.pos)
+      effs.foreach(_.report)
     case Generic(msg, pos) =>
       ctx.warning(msg, pos)
 
@@ -61,14 +51,9 @@ case class Uninit(sym: Symbol, pos: Position) extends Effect                    
 case class OverrideRisk(sym: Symbol, pos: Position) extends Effect                   // calling methods that are not override-free
 case class Call(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect     // calling method results in error
 case class Force(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect    // force lazy val results in error
-case class Argument(fun: Symbol, arg: tpd.Tree) extends Effect                       // use of partial values as full values
-case class Member(sym: Symbol, obj: tpd.Tree, pos: Position) extends Effect          // select members of partial values
-case class CrossAssign(lhs: tpd.Tree, rhs: tpd.Tree) extends Effect                  // assign a partial values to non-partial value
-case class PartialNew(prefix: Type, cls: Symbol, pos: Position) extends Effect       // create new inner class instance while outer is partial
 case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Effect // create new instance of in-scope inner class results in error
 case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
 case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
-case class RecCreate(cls: Symbol, tree: tpd.Tree) extends Effect                     // recursive creation of class
 case class Generic(msg: String, pos: Position) extends Effect                     // generic problem
 
 object Effect {
@@ -296,7 +281,7 @@ class Env(val outerId: Int) extends Cloneable {
     if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(assigned = true))
     else outer.setAssigned(sym)
 
-  def notAssigned = _syms.keys.filter(sym => !_syms(sym).assigned)
+  def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
   def partialSyms = _syms.keys.filter(sym => _syms(sym).isPartial)
   def filledSyms  = _syms.keys.filter(sym => _syms(sym).isFilled)
   def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)

@@ -184,12 +184,11 @@ object Rules {
   def selectLocalLazy(env: Env, sym: Symbol, pos: Position): Res = {
     val symInfo = env(sym)
     if (!symInfo.forced) {
-      env.setForced(sym)
       val res = symInfo.latentInfo.asMethod.apply(i => null, env.heap)
-      env(sym) = symInfo.copy(state = res.state, latentInfo = res.latentInfo)
+      env(sym) = symInfo.copy(forced = true, state = res.state, latentInfo = res.latentInfo)
 
       if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
-      else Res()
+      else Res(state = res.state, latentInfo = res.latentInfo)
     }
     else Res(state = symInfo.state, latentInfo = symInfo.latentInfo)
   }
@@ -379,7 +378,13 @@ class Analyzer {
     Rules.select(prefixRes, tree.symbol, env.heap, tree.pos)
   }
 
+  private def enclosedIn(curSym: Symbol, inSym: Symbol)(implicit ctx: Context): Boolean =
+    curSym.exists && ((curSym `eq` inSym) || (enclosedIn(curSym.owner, inSym)))
+
   def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp match {
+    case tp : TermRef if tp.symbol.is(Module) && enclosedIn(ctx.owner, tp.symbol.moduleClass) =>
+      // self reference by name: object O { ... O.xxx }
+      checkRef(ThisType.raw(ctx.owner.typeRef), env, pos)
     case tp @ TermRef(NoPrefix, _) =>
       val sym = tp.symbol
       if (env.contains(sym)) {

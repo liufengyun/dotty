@@ -1,6 +1,6 @@
 class Foo(val foo1: Partial[Foo], val foo2: Foo) {
   class Inner {
-    val len = name.size
+    val len = name.size    // error
   }
 
   new this.Inner  // error
