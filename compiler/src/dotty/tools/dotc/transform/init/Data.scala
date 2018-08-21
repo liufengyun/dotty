@@ -88,9 +88,9 @@ sealed trait LatentInfo {
           val res2 = o2.select(sym, heap, pos)
           res1.join(res2)
         },
-        (sym: Symbol, valInfo: ValueInfo, heap: Heap) => {
-          o1.assign(sym, valInfo, heap)
-          o2.assign(sym, valInfo, heap)
+        (sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position) => {
+          o1.assign(sym, valInfo, heap, pos)
+          o2.assign(sym, valInfo, heap, pos)
         }
       )
     case _ =>
@@ -106,7 +106,7 @@ case class MethodInfo(fun: (Int => ValueInfo, Heap) => Res) extends LatentInfo {
 
 case class ObjectInfo(
   select: (Symbol, Heap, Position) => Res,
-  assign: (Symbol, ValueInfo, Heap) => Unit) extends LatentInfo
+  assign: (Symbol, ValueInfo, Heap, Position) => Res) extends LatentInfo
 
 //=======================================
 //           Heap / Env
@@ -343,6 +343,8 @@ case class Res(var effects: Effects = Vector.empty, var state: State = State.Ful
       state      = res2.state.join(this.state),
       latentInfo = res2.latentInfo.join(latentInfo)
     )
+
+  def valueInfo: ValueInfo = ValueInfo(state = state, latentInfo = latentInfo)
 
   override def toString: String =
     s"""~Res(

@@ -4,8 +4,6 @@ abstract class Parent {
   def show: Unit
 }
 
-import scala.annotation.partial
-
 class Child extends Parent {
   number = 0
 

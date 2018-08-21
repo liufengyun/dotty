@@ -77,17 +77,51 @@ object Analyzer {
         if (static) Rules.selectStatic(heap(id), sym, pos)
         else Rules.selectDynamic(heap(id), sym, pos)
       },
-      (sym: Symbol, valInfo: ValueInfo, heap: Heap) => {
-        heap(id)(sym) = SymInfo(
-          assigned = true,
-          state = valInfo.state,
-          latentInfo = valInfo.latentInfo
-        )
+      (sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position) => {
+        Rules.assign(heap(id), sym, valInfo, pos)
       }
     )
 }
 
 object Rules {
+  def assign(env: Env, sym: Symbol, valInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
+    if (env.contains(sym)) {
+      env(sym) = SymInfo(
+        assigned = true,
+        state = valInfo.state,
+        latentInfo = valInfo.latentInfo
+      )
+      Res()
+    }
+    else assignFilled(sym, valInfo, pos) // TODO: self annotation
+
+  def assignPartial(obj: LatentInfo, sym: Symbol, valueInfo: ValueInfo, heap: Heap, pos: Position)(implicit ctx: Context): Res =
+    if (obj != NoLatent)
+      obj.asObject.assign(sym, valueInfo, heap, pos)
+    else Res() // TODO: assign to partial is fine?
+
+  def assignFilled(sym: Symbol, valueInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res = {
+    if (valueInfo.state < Analyzer.typeState(sym.info))
+      return Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", pos)))
+    // TODO: latent
+    Res()
+  }
+
+  /** Assign to a local variable, i.e. TermRef with NoPrefix */
+  def assignLocal(env: Env, sym: Symbol, valueInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
+    if (env.contains(sym)) {
+      env(sym) = SymInfo(assigned = true, state = valueInfo.state, latentInfo = valueInfo.latentInfo)
+      Res()
+    }
+    else if (!valueInfo.isFull) // leak assign
+      Res(effects = Vector(Generic("Cannot leak an object under initialization", pos)))
+    else Res()
+
+  def assignFull(sym: Symbol, valueInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
+    if (!valueInfo.isFull)
+      Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
+    else Res()
+
   def selectDynamic(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res =
     if (env.contains(sym)) { // TODO: selection on self annotation
       debug("select dynamic-dispatch symbol " + sym)
@@ -145,11 +179,11 @@ object Rules {
     if (Analyzer.isFilled(sym) || Analyzer.isPartial(sym))
       Res(state = Analyzer.typeState(sym.info))
     else
-      Res(effects = Vector(Generic("The lazy field should be marked as `@partial` or `@filled` in order to be accessed", pos)))
+      Res(effects = Vector(Generic(s"The lazy field $sym should be marked as `@partial` or `@filled` in order to be accessed", pos)))
 
   def selectFilledMethod(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    if (!Analyzer.isFilled(sym) || !Analyzer.isPartial(sym))
-      Res(effects = Vector(Generic("The method should be marked as `@partial` or `@filled` in order to be called", pos)))
+    if (!Analyzer.isFilled(sym) && !Analyzer.isPartial(sym))
+      Res(effects = Vector(Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)))
     else if (sym.info.isInstanceOf[ExprType]) {   // parameter-less call
       Res(state = Analyzer.typeState(sym.info.widenExpr))
     }
@@ -227,7 +261,7 @@ object Rules {
       else if (res.isFilled) {
         if (sym.is(Method)) {
           if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
-            res += Generic(s"The method $sym should be marked as `@partial` or `@filled` in order to be called", pos)
+            res += Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)
 
           Res(state = State.Full, effects = res.effects)
         }
@@ -551,35 +585,16 @@ class Analyzer {
 
       def check(prefixRes: Res, sym: Symbol): Res = {
         if (prefixRes.hasErrors) return prefixRes
-        if (prefixRes.state == State.Full) {
-          if (!rhsRes.isFull)
-            return Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", rhs.pos)))
-        }
-        else if (prefixRes.state == State.Filled) {
-          if (rhsRes.state < Analyzer.typeState(sym.info))
-            return Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", rhs.pos)))
-        }
-        else { // assign to partial is fine
-          if (prefixRes.isLatent) {
-            val valInfo = ValueInfo(state = rhsRes.state, latentInfo = rhsRes.latentInfo)
-            prefixRes.latentInfo.asObject.assign(sym, valInfo, env.heap)
-          }
-        }
-
-        Res()
+        if (prefixRes.state == State.Full) Rules.assignFull(sym, rhsRes.valueInfo, rhs.pos)
+        else if (prefixRes.state == State.Filled) Rules.assignFilled(sym, rhsRes.valueInfo, rhs.pos)
+        else Rules.assignPartial(prefixRes.latentInfo, sym, rhsRes.valueInfo, env.heap, rhs.pos)
       }
 
       lhs match {
         case ident @ Ident(_) =>
           ident.tpe match {
             case tp @ TermRef(NoPrefix, _) =>
-              if (env.contains(tp.symbol)) {
-                env(tp.symbol) = SymInfo(assigned = true, state = rhsRes.state, latentInfo = rhsRes.latentInfo)
-                Res()
-              }
-              else if (!rhsRes.isFull) // leak assign
-                Res(effects = Vector(Generic("Cannot leak an object under initialization", rhs.pos)))
-              else Res()
+              Rules.assignLocal(env, tp.symbol, rhsRes.valueInfo, rhs.pos)
             case tp @ TermRef(prefix, _) =>
               val prefixRes = checkRef(prefix, env, rhs.pos)
               check(prefixRes, tp.symbol)

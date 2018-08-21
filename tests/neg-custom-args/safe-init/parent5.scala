@@ -3,8 +3,8 @@ import scala.collection.mutable
 class Foo {
   val map: mutable.Map[Int, String] = mutable.Map.empty
 
-  @scala.annotation.init
-  def enter(k: Int, v: String, debug: String = "") = map(k) = v
+  @scala.annotation.filled
+  def enter(k: Int, v: String) = map(k) = v
 
   def foo(x: Int) = 5 + x
 }

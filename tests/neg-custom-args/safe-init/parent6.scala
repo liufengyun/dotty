@@ -1,7 +1,5 @@
-import scala.collection.mutable
-
 trait Foo {
-  @scala.annotation.init
+  @scala.annotation.filled
   class A
 
   class B {
@@ -12,8 +10,8 @@ trait Foo {
 }
 
 class Bar extends Foo {
-  new A       // OK
-  new B       // error
+  val a = new A         // OK
+  val b = new B         // error
 
   override def foo(x: Int) = x + id
   val id = 100

@@ -6,7 +6,7 @@ class Foo {
   }
 
   val bar = new Bar(this)
-  new bar.Inner            // ok
+  new bar.Inner            // error
 }
 
 import scala.annotation.partial
