@@ -6,7 +6,7 @@ class X {
   }
 
   A.foo                              // error
-  A.bar                              // error: best effort
+  A.bar                              // ok: forced
 
   val name = "jack"
 }

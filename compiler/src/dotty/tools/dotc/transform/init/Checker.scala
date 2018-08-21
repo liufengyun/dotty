@@ -134,7 +134,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     // create a custom ObjectInfo for `this`, which implements special rules about member selection
     val env = setupConstructorEnv(root, cls, tree, analyzer)
 
-    val res = analyzer.checkStats(tree.body, env)
+    val res = analyzer.checkTemplate(tree, root, env)
 
     res.effects.foreach(_.report)
     env.notAssigned.foreach { sym =>
@@ -147,7 +147,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   }
 
   def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
-    val env = outerEnv.newEnv()
+    val env = outerEnv.newObject(cls)
 
     val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
     for (param <- accessors)
@@ -163,5 +163,4 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     env
   }
-
 }

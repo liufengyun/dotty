@@ -194,13 +194,13 @@ object Env {
     _uniqueId
   }
 
+  class RootEnv extends Env(-1) {
+    override def contains(sym: Symbol): Boolean = _syms.contains(sym)
+  }
+
   def createRootEnv: Env = {
     val heap = new Heap
-
-    val env = new Env(-1) {
-      override def contains(sym: Symbol): Boolean = _syms.contains(sym)
-    }
-
+    val env = new RootEnv
     heap.addEnv(env)
     env
   }
@@ -215,7 +215,7 @@ object Env {
   *  2. environment refer each other via `id`, which implies LatentInfo should
   *     never use captured environment other than its `id`.
   */
-class Env(val outerId: Int) extends Cloneable {
+class Env(outerId: Int) extends Cloneable {
   val id: Int = Env.uniqueId
 
   assert(outerId != id)
@@ -233,8 +233,18 @@ class Env(val outerId: Int) extends Cloneable {
     heap2(this.id)
   }
 
+  def nonObjectEnv: Env =
+    if (this.isInstanceOf[ObjectEnv]) this.outer.nonObjectEnv
+    else this
+
   def newEnv(heap: Heap = this.heap): Env = {
-    val env = new Env(this.id)
+    val env = new Env(nonObjectEnv.id)
+    heap.addEnv(env)
+    env
+  }
+
+  def newObject(cls: ClassSymbol, heap: Heap = this.heap): ObjectEnv = {
+    val env = new ObjectEnv(nonObjectEnv.id, cls)
     heap.addEnv(env)
     env
   }
@@ -252,10 +262,6 @@ class Env(val outerId: Int) extends Cloneable {
     if (_syms.contains(sym)) _syms(sym)
     else outer(sym)
   }
-
-  def setState(sym: Symbol, state: State): Unit =
-    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(state = state))
-    else outer.setState(sym, state)
 
   def isAssigned(sym: Symbol): Boolean =
     if (_syms.contains(sym)) _syms(sym).assigned
@@ -300,7 +306,7 @@ class Env(val outerId: Int) extends Cloneable {
 
   override def toString: String =
     (if (outerId > 0) outer.toString + "\n" else "") ++
-    s"""~ --------------$id($outerId)-----------------------
+    s"""~ --------------${getClass} - $id($outerId)-----------------------
         ~ | locals:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
         ~ | partial: ${partialSyms}
@@ -308,6 +314,27 @@ class Env(val outerId: Int) extends Cloneable {
         ~ | lazy forced:  ${forcedSyms}
         ~ | latent symbols: ${latentSyms}"""
     .stripMargin('~')
+}
+
+class ObjectEnv(outerId: Int, val cls: ClassSymbol) extends Env(outerId) {
+  // TODO: object environment should not resolve outer, only method environment resolves outer
+  override def update(sym: Symbol, info: SymInfo): Unit = {
+    assert(_syms.contains(sym))
+    _syms = _syms.updated(sym, info)
+  }
+
+  override def contains(sym: Symbol): Boolean =
+    _syms.contains(sym)
+
+  override def apply(sym: Symbol): SymInfo =
+    _syms(sym)
+
+  override def isAssigned(sym: Symbol): Boolean =
+    _syms(sym).assigned
+  override def setAssigned(sym: Symbol): Unit =
+    _syms = _syms.updated(sym, _syms(sym).copy(assigned = true))
+
+  override def toString: String = super.toString ++ s"\n | class: $cls"
 }
 
 //=======================================

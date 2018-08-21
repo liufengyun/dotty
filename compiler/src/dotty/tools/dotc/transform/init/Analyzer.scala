@@ -73,27 +73,53 @@ object Analyzer {
   def objectInfo(id: Int, static: Boolean = false)(implicit ctx: Context) =
     ObjectInfo(
       (sym: Symbol, heap: Heap, pos: Position) => {
-        // println(s"select $sym from:\n" + heap(id).toString)
-        if (static) Rules.selectStatic(heap(id), sym, pos)
-        else Rules.selectDynamic(heap(id), sym, pos)
+        val objEnv = heap(id).asInstanceOf[ObjectEnv]
+        Rules.select(objEnv, sym, pos, static)
       },
       (sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position) => {
-        Rules.assign(heap(id), sym, valInfo, pos)
+        val objEnv = heap(id).asInstanceOf[ObjectEnv]
+        Rules.assign(objEnv, sym, valInfo, pos)
       }
     )
 }
 
 object Rules {
-  def assign(env: Env, sym: Symbol, valInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
-    if (env.contains(sym)) {
-      env(sym) = SymInfo(
+  // TODO: handle order to resolution
+  def resolveParent(objEnv: ObjectEnv, sym: Symbol)(implicit ctx: Context): Res = {
+
+    objEnv.cls.classParents.foreach { parentTp =>
+      val cls = parentTp.classSymbol
+      if (parentTp.member(sym.name).suchThat(_ `eq` sym).exists) {
+        val info = objEnv(cls)
+
+        return Res(state = info.state, latentInfo = info.latentInfo)
+      }
+    }
+
+    if (sym.isConstructor) Res()
+    else throw new Exception(s"Can't resolve $sym on class ${objEnv.cls}")
+  }
+
+  def assign(objEnv: ObjectEnv, sym: Symbol, valInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
+    if (objEnv.contains(sym)) {
+      objEnv(sym) = SymInfo(
         assigned = true,
         state = valInfo.state,
         latentInfo = valInfo.latentInfo
       )
       Res()
     }
-    else assignFilled(sym, valInfo, pos) // TODO: self annotation
+    else {
+      val parentRes = Rules.resolveParent(objEnv, sym)
+      assign(parentRes, sym, valInfo, objEnv.heap, pos)
+    }
+
+  def assign(prefixRes: Res, sym: Symbol, valueInfo: ValueInfo, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    if (prefixRes.hasErrors) return prefixRes
+    if (prefixRes.isFull) assignFull(sym, valueInfo, pos)
+    else if (prefixRes.isFilled) assignFilled(sym, valueInfo, pos)
+    else assignPartial(prefixRes.latentInfo, sym, valueInfo, heap, pos)
+  }
 
   def assignPartial(obj: LatentInfo, sym: Symbol, valueInfo: ValueInfo, heap: Heap, pos: Position)(implicit ctx: Context): Res =
     if (obj != NoLatent)
@@ -122,77 +148,50 @@ object Rules {
       Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
     else Res()
 
-  def selectDynamic(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    if (env.contains(sym)) { // TODO: selection on self annotation
-      debug("select dynamic-dispatch symbol " + sym)
-      if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
-      else if (sym.is(Method)) {
-        val res = selectLocalMethod(env, sym, pos)
-
-        if (!sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
-          res += OverrideRisk(sym, pos)
-
-        res
-      }
-      else if (sym.isClass) selectLocalClass(env, sym, pos)
-      else {
-        val res = selectLocalField(env, sym, pos)
-
-        if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
-          res += UseAbstractDef(sym, pos)
-
-        res
-      }
+  def select(objEnv: ObjectEnv, sym: Symbol, pos: Position, static: Boolean = false)(implicit ctx: Context): Res =
+    if (objEnv.contains(sym)) {
+      if (static) Rules.selectStatic(objEnv, sym, pos)
+      else Rules.selectDynamic(objEnv, sym, pos)
     }
-    else { // select on super
-      if (sym.is(Lazy)) selectFilledLazy(sym, pos)
-      else if (sym.is(Method)) selectFilledMethod(sym, pos)
-      else if (sym.isClass) selectFilledClass(sym, pos)
-      else selectFilledField(sym, pos)
+    else {
+      val parentRes = Rules.resolveParent(objEnv, sym)
+      Rules.select(parentRes, sym, objEnv.heap, pos)
     }
 
-  def selectStatic(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    if (env.contains(sym)) { // TODO: selection on self annotation
-      debug("select static-dispatch symbol " + sym)
-      if (sym.is(Lazy)) selectLocalLazy(env, sym, pos)
-      else if (sym.is(Method)) selectLocalMethod(env, sym, pos)
-      else if (sym.isClass) selectLocalClass(env, sym, pos)
-      else selectLocalField(env, sym, pos)
+  def selectDynamic(env: ObjectEnv, sym: Symbol, pos: Position)(implicit ctx: Context): Res = {
+    debug("select dynamic-dispatch symbol " + sym)
+    if (sym.is(Lazy)) selectLazy(env, sym, pos)
+    else if (sym.is(Method)) {
+      val res = selectMethod(env, sym, pos)
+
+      if (!sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
+        res += OverrideRisk(sym, pos)
+
+      res
     }
-    else { // select on super
-      if (sym.is(Lazy)) selectFilledLazy(sym, pos)
-      else if (sym.is(Method)) selectFilledMethod(sym, pos)
-      else if (sym.isClass) selectFilledClass(sym, pos)
-      else selectFilledField(sym, pos)
+    else if (sym.isClass) selectClass(env, sym, pos)
+    else {
+      val res = selectField(env, sym, pos)
+
+      if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
+        res += UseAbstractDef(sym, pos)
+
+      res
     }
+  }
 
-  def selectFilledClass(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    if (Analyzer.isFilled(sym) || Analyzer.isPartial(sym))
-      Res()
-    else
-      Res(effects = Vector(Generic(s"Annotate the nested $sym with `@partial` or `@filled`", pos)))
+  def selectStatic(env: ObjectEnv, sym: Symbol, pos: Position)(implicit ctx: Context): Res = {
+    debug("select static-dispatch symbol " + sym)
+    if (sym.is(Lazy)) selectLazy(env, sym, pos)
+    else if (sym.is(Method)) selectMethod(env, sym, pos)
+    else if (sym.isClass) selectClass(env, sym, pos)
+    else selectField(env, sym, pos)
+  }
 
-  def selectFilledField(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    Res(state = Analyzer.typeState(sym.info))
-
-  def selectFilledLazy(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    if (Analyzer.isFilled(sym) || Analyzer.isPartial(sym))
-      Res(state = Analyzer.typeState(sym.info))
-    else
-      Res(effects = Vector(Generic(s"The lazy field $sym should be marked as `@partial` or `@filled` in order to be accessed", pos)))
-
-  def selectFilledMethod(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
-    if (!Analyzer.isFilled(sym) && !Analyzer.isPartial(sym))
-      Res(effects = Vector(Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)))
-    else if (sym.info.isInstanceOf[ExprType]) {   // parameter-less call
-      Res(state = Analyzer.typeState(sym.info.widenExpr))
-    }
-    else Res()
-
-  def selectLocalClass(env: Env, sym: Symbol, pos: Position): Res =
+  def selectClass(env: Env, sym: Symbol, pos: Position): Res =
     Res(latentInfo = env(sym).latentInfo)
 
-  def selectLocalField(env: Env, sym: Symbol, pos: Position): Res = {
+  def selectField(env: Env, sym: Symbol, pos: Position): Res = {
     val symInfo = env(sym)
 
     var effs = Vector.empty[Effect]
@@ -201,7 +200,7 @@ object Rules {
     Res(effects = effs, state = symInfo.state, latentInfo = symInfo.latentInfo)
   }
 
-  def selectLocalMethod(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res = {
+  def selectMethod(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res = {
     val symInfo = env(sym)
     if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
       val latentInfo = symInfo.latentInfo.asMethod
@@ -215,7 +214,7 @@ object Rules {
     else Res(latentInfo = symInfo.latentInfo)
   }
 
-  def selectLocalLazy(env: Env, sym: Symbol, pos: Position): Res = {
+  def selectLazy(env: Env, sym: Symbol, pos: Position): Res = {
     val symInfo = env(sym)
     if (!symInfo.forced) {
       val res = symInfo.latentInfo.asMethod.apply(i => null, env.heap)
@@ -278,15 +277,21 @@ object Rules {
           Res(effects = res.effects)
         }
         else {
-          if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
-            res += Generic(s"Cannot access field $sym on a partial object", pos)
-
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
       }
       else Res()
     }
   }
+
+  /** Select a local variable, i.e. TermRef with NoPrefix */
+  def selectLocal(env: Env, sym: Symbol, pos: Position)(implicit ctx: Context): Res =
+    if (env.contains(sym)) {
+      if (sym.is(Lazy)) Rules.selectLazy(env, sym, pos)
+      else if (sym.is(Method)) Rules.selectMethod(env, sym, pos)
+      else Rules.selectField(env, sym, pos)
+    }
+    else Res()
 }
 
 class Analyzer {
@@ -296,6 +301,9 @@ class Analyzer {
   val indentTab = " "
 
   def trace[T](msg: String, env: Env)(body: => T) = {
+    // object env should never be used as checking environment
+    assert(!env.isInstanceOf[ObjectEnv])
+
     indentedDebug(s"==> ${pad(msg)}?")
     indentedDebug(env.toString)
     depth += 1
@@ -327,7 +335,7 @@ class Analyzer {
     val valInfos = args.map { arg =>
       val res = apply(arg, env)
       effs = effs ++ res.effects
-      ValueInfo(res.state, res.latentInfo)
+      res.valueInfo
     }
 
     if (effs.size > 0) return Res(effects = effs)
@@ -389,7 +397,7 @@ class Analyzer {
     val valInfos = args.map { arg =>
       val res = apply(arg, env)
       effs = effs ++ res.effects
-      ValueInfo(res.state, res.latentInfo)
+      res.valueInfo
     }
 
     if (effs.size > 0) return Res(effects = effs)
@@ -420,13 +428,7 @@ class Analyzer {
       // self reference by name: object O { ... O.xxx }
       checkRef(ThisType.raw(ctx.owner.typeRef), env, pos)
     case tp @ TermRef(NoPrefix, _) =>
-      val sym = tp.symbol
-      if (env.contains(sym)) {
-        if (sym.is(Lazy)) Rules.selectLocalLazy(env, sym, pos)
-        else if (sym.is(Method)) Rules.selectLocalMethod(env, sym, pos)
-        else Rules.selectLocalField(env, sym, pos)
-      }
-      else Res()
+      Rules.selectLocal(env, tp.symbol, pos)
     case tp @ TermRef(prefix, _) =>
       val res = checkRef(prefix, env, pos)
       Rules.select(res, tp.symbol, env.heap, pos)
@@ -462,12 +464,17 @@ class Analyzer {
 
   def checkValDef(vdef: ValDef, env: Env)(implicit ctx: Context): Res = {
     val rhsRes = apply(vdef.rhs, env)
+    val sym = vdef.symbol
 
-    if (!tpd.isWildcardArg(vdef.rhs))
-      env.setAssigned(vdef.symbol)     // take `_` as uninitialized, otherwise it's initialized
-
-    val symInfo = env(vdef.symbol)
-    env(vdef.symbol) = symInfo.copy(latentInfo = rhsRes.latentInfo, state = rhsRes.state)
+    // take `_` as uninitialized, otherwise it's initialized
+    if (!tpd.isWildcardArg(vdef.rhs)) sym.termRef match {
+      case tp @ TermRef(NoPrefix, _) =>
+        Rules.assignLocal(env, tp.symbol, rhsRes.valueInfo, vdef.rhs.pos)
+      case tp @ TermRef(prefix, _) =>
+        val prefixRes = checkRef(prefix, env, vdef.rhs.pos)
+        assert(!prefixRes.hasErrors)
+        prefixRes.latentInfo.asObject.assign(sym, rhsRes.valueInfo, env.heap, vdef.pos)
+    }
 
     Res(effects = rhsRes.effects)
   }
@@ -498,7 +505,7 @@ class Analyzer {
     res
   }
 
-  def indexConstructors(cls: Symbol, tmpl: Template, env: Env)(implicit ctx: Context): Unit = {
+  def indexConstructors(cls: ClassSymbol, tmpl: Template, env: Env)(implicit ctx: Context): Unit = {
     def nonStaticStats = tmpl.body.filter {
       case vdef : ValDef  =>
         !vdef.symbol.hasAnnotation(defn.ScalaStaticAnnot)
@@ -514,19 +521,20 @@ class Analyzer {
       }
       else checking(cls) {
         val outerEnv = heap(env.id)
-        val newEnv = outerEnv.newEnv()
+        val objEnv = outerEnv.newObject(cls)
 
         tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
           val ValueInfo(state, latentInfo) = valInfoFn(index)
-          newEnv.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
+          objEnv.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
         }
 
-        indexStats(nonStaticStats, newEnv)
+        indexStats(nonStaticStats, objEnv)
 
-        val thisInfo =  Analyzer.objectInfo(newEnv.id, static = true)
-        outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
+        val thisInfo =  Analyzer.objectInfo(objEnv.id, static = true)
+        val checkEnv = outerEnv.nonObjectEnv
+        checkEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
 
-        val res = apply(tmpl, newEnv)(ctx.withOwner(cls))
+        val res = checkTemplate(tmpl, checkEnv, objEnv)(ctx.withOwner(cls))
         Res(latentInfo = thisInfo, effects = res.effects, state = State.Filled)
       }
     }
@@ -575,20 +583,13 @@ class Analyzer {
     case vdef: ValDef if Analyzer.isNonParamField(vdef.symbol) =>
       env.add(vdef.symbol, SymInfo(assigned = false))
     case tdef: TypeDef if tdef.isClassDef  =>
-      indexConstructors(tdef.symbol, tdef.rhs.asInstanceOf[Template], env)
+      indexConstructors(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template], env)
     case _ =>
   }
 
   def checkAssign(lhs: Tree, rhs: Tree, env: Env)(implicit ctx: Context): Res = {
       val rhsRes = apply(rhs, env)
       if (rhsRes.hasErrors) return rhsRes
-
-      def check(prefixRes: Res, sym: Symbol): Res = {
-        if (prefixRes.hasErrors) return prefixRes
-        if (prefixRes.state == State.Full) Rules.assignFull(sym, rhsRes.valueInfo, rhs.pos)
-        else if (prefixRes.state == State.Filled) Rules.assignFilled(sym, rhsRes.valueInfo, rhs.pos)
-        else Rules.assignPartial(prefixRes.latentInfo, sym, rhsRes.valueInfo, env.heap, rhs.pos)
-      }
 
       lhs match {
         case ident @ Ident(_) =>
@@ -597,12 +598,21 @@ class Analyzer {
               Rules.assignLocal(env, tp.symbol, rhsRes.valueInfo, rhs.pos)
             case tp @ TermRef(prefix, _) =>
               val prefixRes = checkRef(prefix, env, rhs.pos)
-              check(prefixRes, tp.symbol)
+              Rules.assign(prefixRes, tp.symbol, rhsRes.valueInfo, env.heap, rhs.pos)
           }
         case sel @ Select(qual, _) =>
           val prefixRes = apply(qual, env)
-          check(prefixRes, sel.symbol)
+          Rules.assign(prefixRes, sel.symbol, rhsRes.valueInfo, env.heap, rhs.pos)
       }
+  }
+
+  def checkParents(parents: List[Tree], outerEnv: Env, thisEnv: ObjectEnv)(implicit ctx: Context): Res = {
+    parents.foldLeft(Res()) { (acc, parent) =>
+      val sym = parent.tpe.classSymbol
+      val res1 = apply(parent, outerEnv)
+      thisEnv.add(sym, SymInfo(state = res1.state, latentInfo = res1.latentInfo))
+      acc.copy(effects = acc.effects ++ res1.effects)
+    }
   }
 
   object NewEx {
@@ -621,10 +631,11 @@ class Analyzer {
     }
   }
 
+  def checkTemplate(tmpl: Template, outerEnv: Env, thisEnv: ObjectEnv)(implicit ctx: Context) = {
+    checkParents(tmpl.parents, outerEnv, thisEnv).join(checkStats(tmpl.body, outerEnv))
+  }
+
   def apply(tree: Tree, env: Env)(implicit ctx: Context): Res = trace("checking " + tree.show, env)(tree match {
-    case tmpl: Template =>
-      // TODO: check parents
-      checkStats(tmpl.body, env)
     case vdef : ValDef if !vdef.symbol.is(Lazy) && !vdef.rhs.isEmpty =>
       checkValDef(vdef, env)
     case _: DefTree =>  // ignore other definitions
