@@ -84,9 +84,19 @@ object Analyzer {
 }
 
 object Rules {
+  def latentState(latentInfo: LatentInfo, heap: Heap, pos: Position): State = latentInfo match {
+    case mtLatent: MethodInfo =>
+      val res = latentInfo.asMethod(i => ValueInfo(), heap.clone)
+      if (res.hasErrors) State.Filled
+      else if (res.isLatent) latentState(res.latentInfo, heap, pos)
+      else State.Full  // even if the result is partial, as the closure cannot be called
+    case objLatent: ObjectInfo =>
+      State.Filled
+    case NoLatent => ???  // impossible
+  }
+
   // TODO: handle order to resolution
   def resolveParent(objEnv: ObjectEnv, sym: Symbol)(implicit ctx: Context): Res = {
-
     objEnv.cls.classParents.foreach { parentTp =>
       val cls = parentTp.classSymbol
       if (parentTp.member(sym.name).suchThat(_ `eq` sym).exists) {
@@ -96,8 +106,16 @@ object Rules {
       }
     }
 
+    // constructors are handled specially, see `checkNew`
     if (sym.isConstructor) Res()
-    else throw new Exception(s"Can't resolve $sym on class ${objEnv.cls}")
+    else if (objEnv.cls.info.memberInfo(sym).exists) { // self annotation
+      // TODO: possibility to refine based on `sym.owner` is class or trait
+      Res(state = State.Partial)
+    }
+    else {
+      debug(objEnv.toString)
+      throw new Exception(s"Can't resolve $sym on class ${objEnv.cls}")
+    }
   }
 
   def assign(objEnv: ObjectEnv, sym: Symbol, valInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
@@ -259,19 +277,19 @@ object Rules {
       }
       else if (res.isFilled) {
         if (sym.is(Method)) {
-          if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
+          if (!Analyzer.isPartial(sym) && !Analyzer.isFilled(sym))
             res += Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)
 
           Res(state = State.Full, effects = res.effects)
         }
         else if (sym.is(Lazy)) {
-          if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
+          if (!Analyzer.isPartial(sym) && !Analyzer.isFilled(sym))
             res += Generic(s"The lazy field $sym should be marked as `@partial` or `@filled` in order to be accessed", pos)
 
           Res(state = Analyzer.typeState(sym.info), effects = res.effects)
         }
         else if (sym.isClass) {
-          if (!Analyzer.isPartial(sym) || !Analyzer.isFilled(sym))
+          if (!Analyzer.isPartial(sym) && !Analyzer.isFilled(sym))
             res += Generic(s"The nested $sym should be marked as `@partial` or `@filled` in order to be instantiated", pos)
 
           Res(effects = res.effects)
@@ -335,6 +353,10 @@ class Analyzer {
     val valInfos = args.map { arg =>
       val res = apply(arg, env)
       effs = effs ++ res.effects
+
+      if (res.isLatent)
+        res.state = Rules.latentState(res.latentInfo, env.heap, arg.pos)
+
       res.valueInfo
     }
 
@@ -356,26 +378,11 @@ class Analyzer {
     }
   }
 
-  def force(latentInfo: LatentInfo, heap: Heap, pos: Position): Res = {
-    // TODO: better handle latent objects
-    if (latentInfo.isObject)
-      return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
-
-    val res = latentInfo.asMethod(i => ValueInfo(), heap)
-    if (res.hasErrors) res  // fewer errors at one place
-    else if (res.isLatent) force(res.latentInfo, heap, pos)
-    else Res()
-  }
-
   def checkParams(sym: Symbol, valInfos: List[ValueInfo], paramInfos: List[Type], env: Env, positions: List[Position])(implicit ctx: Context): Res = {
     def paramState(index: Int) = Analyzer.typeState(paramInfos(index))
 
     valInfos.zipWithIndex.foreach { case (valInfo, index) =>
-      if (valInfo.isLatent && valInfo.latentInfo.isMethod) {
-        val res = force(valInfo.latentInfo, env.heap, positions(index))
-        if (res.hasErrors && !paramState(index).isPartial) return res   // report fewer error at one place
-      }
-      else if (valInfo.state < paramState(index))
+      if (valInfo.state < paramState(index))
         return Res(effects = Vector(Generic("Leak of object under initialization to " + sym, positions(index))))
     }
 
@@ -397,6 +404,10 @@ class Analyzer {
     val valInfos = args.map { arg =>
       val res = apply(arg, env)
       effs = effs ++ res.effects
+
+      if (res.isLatent)
+        res.state = Rules.latentState(res.latentInfo, env.heap, arg.pos)
+
       res.valueInfo
     }
 
@@ -525,7 +536,8 @@ class Analyzer {
 
         tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
           val ValueInfo(state, latentInfo) = valInfoFn(index)
-          objEnv.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
+          val sym = cls.info.decls.filter(x => param.name.eq(x.name) && !x.is(Method)).head
+          objEnv.add(sym, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
         }
 
         indexStats(nonStaticStats, objEnv)
@@ -563,7 +575,7 @@ class Analyzer {
             env2.add(param.symbol, SymInfo(assigned = true, state = state, latentInfo = latentInfo))
           }
 
-          checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
+          checking(ddef.symbol) { apply(ddef.rhs, env2.nonObjectEnv)(ctx.withOwner(ddef.symbol)) }
         }
       }
 
@@ -576,7 +588,7 @@ class Analyzer {
           Res()
         }
         else checking(vdef.symbol) {
-          apply(vdef.rhs, env2)
+          apply(vdef.rhs, env2.nonObjectEnv)
         }
       }
       env.add(vdef.symbol,  SymInfo(latentInfo = latentInfo))
@@ -610,7 +622,7 @@ class Analyzer {
     parents.foldLeft(Res()) { (acc, parent) =>
       val sym = parent.tpe.classSymbol
       val res1 = apply(parent, outerEnv)
-      thisEnv.add(sym, SymInfo(state = res1.state, latentInfo = res1.latentInfo))
+      thisEnv.add(sym, SymInfo(state = State.Filled, latentInfo = res1.latentInfo))
       acc.copy(effects = acc.effects ++ res1.effects)
     }
   }

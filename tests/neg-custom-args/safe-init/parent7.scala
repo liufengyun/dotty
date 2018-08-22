@@ -6,7 +6,7 @@ trait Foo {
 }
 
 trait Bar { this: Foo =>
-  val message = "hello, " + name        // TODO: this should be an error
+  val message = "hello, " + name        // ok: because `name` is marked partial
 
   println(title)                        // error
 }

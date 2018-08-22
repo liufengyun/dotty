@@ -1,7 +1,7 @@
 object Flags {
   case class FlagSet(val bits: Long) {
     def toTermFlags = if (bits == 0) this else {
-      println(size)                               // eror
+      println(size)                               // error
       FlagSet(bits & ~KINDFLAGS | TERMS)
     }
   }

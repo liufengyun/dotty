@@ -166,6 +166,11 @@ class CompilationTests extends ParallelTesting {
     compileFile("tests/neg-custom-args/completeFromSource/nested/Test1.scala", defaultOptions.and("-sourcepath", "tests/neg-custom-args", "-scansource"))
   }.checkExpectedErrors()
 
+  @Test def negInit: Unit = {
+    implicit val testGroup: TestGroup = TestGroup("compileNeg")
+    compileFilesInDir("tests/neg-custom-args/safe-init", defaultOptions and "-Xfatal-warnings")
+  }.checkExpectedErrors()
+
   // Run tests -----------------------------------------------------------------
 
   @Test def runAll: Unit = {

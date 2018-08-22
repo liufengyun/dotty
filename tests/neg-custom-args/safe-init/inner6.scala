@@ -14,7 +14,7 @@ class Parent {
 
 class Child extends Parent {
   class InnerA extends Inner1
-  class InnerB extends Inner2
+  class InnerB extends Inner2  // error
 
   new InnerA
   new InnerB  // error
