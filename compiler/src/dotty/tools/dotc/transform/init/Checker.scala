@@ -76,6 +76,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val cls = ctx.owner.asClass
     val self = cls.thisType
 
+    // ignore init checking if there are errors or `@unchecked`
     if (cls.hasAnnotation(defn.UncheckedAnnot)) return tree
 
     def lateInitMsg(sym: Symbol) =
@@ -129,37 +130,36 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val analyzer = new Analyzer
 
     // current class env needs special setup
-    val root = Env.createRootEnv
+    val root = Heap.createRootEnv
 
     // create a custom ObjectInfo for `this`, which implements special rules about member selection
-    val env = setupConstructorEnv(root, cls, tree, analyzer)
+    val obj = setupConstructorEnv(root, cls, tree, analyzer)
 
-    val res = analyzer.checkTemplate(tree, root, env)
+    val res = analyzer.checkTemplate(tree, root, obj)
 
     res.effects.foreach(_.report)
-    env.notAssigned.foreach { sym =>
-      ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
+    obj.notAssigned.foreach { name =>
+      val sym = obj.tp.member(name).suchThat(!_.is(Method)).symbol
+      ctx.warning(s"field ${name} is not initialized", sym.pos)
     }
 
-    debug(env.toString)
+    debug(obj.toString)
 
     tree
   }
 
-  def setupConstructorEnv(outerEnv: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
-    val env = outerEnv.newObject(cls)
+  def setupConstructorEnv(env: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
+    val obj = new ObjectRep(env.id, cls.typeRef)
 
-    val accessors = cls.paramAccessors.filterNot(x => x.isSetter)
-    for (param <- accessors)
-      env.add(param, SymInfo(assigned = true, state = Analyzer.typeState(param.info)))
+    analyzer.indexClass(cls, tmpl, env)
+    analyzer.initObject(cls, tmpl, obj)
 
-    analyzer.indexStats(tmpl.body, env)
-    analyzer.indexConstructors(cls, tmpl, outerEnv) // for recursive instantiation
+    val thisInfo = Analyzer.objectValue(obj.id, static = cls.is(Final))
+    env.add(cls, SymInfo(state = State.Partial, latentValue = thisInfo))
 
-    val thisInfo = Analyzer.objectInfo(env.id, static = cls.is(Final))
+    Analyzer.addOuterThis(cls, env)
 
-    outerEnv.add(cls, SymInfo(state = State.Partial, latentInfo = thisInfo))
-    Analyzer.addOuterThis(cls, outerEnv)
+    // analyzer.indexConstructors(cls, tmpl, env) // for recursive instantiation
 
     env
   }
