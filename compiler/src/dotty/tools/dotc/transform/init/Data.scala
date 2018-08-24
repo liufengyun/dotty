@@ -121,23 +121,15 @@ sealed trait LatentValue {
           res1.join(res2)
         }
       }
-    case (o1: ObjectValue, o2: ObjectValue) =>
-      ObjectValue(
-        (sym: Symbol, heap: Heap, pos: Position) => {
-          val res1 = o1.select(sym, heap, pos)
-          val res2 = o2.select(sym, heap, pos)
-          res1.join(res2)
-        },
-        (sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position) => {
-          o1.assign(sym, valInfo, heap, pos)
-          o2.assign(sym, valInfo, heap, pos)
-        },
-        (sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, objOpt: ObjectRep, pos: Position) => {
-          val res1 = o1.init(sym, valueInfos, heap, objOpt, pos)
-          val res2 = o2.init(sym, valueInfos, heap, objOpt, pos)
-          res1.join(res2)
-        }
-      )
+    case (o1: AtomObjectValue, o2: AtomObjectValue) =>
+      if (o1.id == o2.id) o1
+      else new UnionObjectValue(Set(o1, o2))
+    case (o1: UnionObjectValue, o2: UnionObjectValue) =>
+      new UnionObjectValue(o1.values ++ o2.values)
+    case (o1: UnionObjectValue, o2: AtomObjectValue) =>
+      new UnionObjectValue(o1.values + o2)
+    case (o1: AtomObjectValue, o2: UnionObjectValue) =>
+      new UnionObjectValue(o2.values + o1)
     case _ =>
       throw new Exception(s"Can't join $this and $other")
   }
@@ -149,10 +141,12 @@ object NoLatent extends LatentValue {
 
 case class FunctionValue(apply: (Int => ValueInfo, Heap) => Res) extends LatentValue
 
-case class ObjectValue(
-  select: (Symbol, Heap, Position) => Res,
-  assign: (Symbol, ValueInfo, Heap, Position) => Res,
-  init: (Symbol, List[ValueInfo], Heap, ObjectRep, Position) => Res) extends LatentValue
+trait ObjectValue extends LatentValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res
+  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue
+  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res
+}
 
 class State(val state: Int) {
   def isPartial = this == State.Partial
@@ -295,58 +289,81 @@ class Env(outerId: Int) extends HeapEntry {
     .stripMargin('~')
 }
 
-
-/** A container holds all information about fields and outers of an object
+/** ClassEnv stores the outer information for class members with a particular prefix (outer)
+ *
+ *  Class environment are immutable, thus they don't need to be in the heap.
  */
-class ObjectRep(envId: Int, val tp: Type) extends HeapEntry with Cloneable {
+case class ClassEnv(envId: Int, val tp: Type) {
+  def classSymbol(implicit ctx: Context): ClassSymbol = tp.classSymbol.asClass
+}
+
+/** A container holds all information about fields of an object and outers of object's classes
+ */
+class ObjectRep extends HeapEntry with Cloneable {
   override def clone: ObjectRep = super.clone.asInstanceOf[ObjectRep]
 
-  def classSymbol(implicit ctx: Context): ClassSymbol = tp.classSymbol.asClass
-
-  def env: Env = heap(envId).asInstanceOf[Env]
-
-  protected var _fields: Map[Name, SymInfo] = Map()
-
-  def apply(name: Name): SymInfo =
-    _fields(name)
-
-  def add(name: Name, info: SymInfo) =
-    _fields = _fields.updated(name, info)
-
-  // object environment should not resolve outer
-  def update(name: Name, info: SymInfo): Unit = {
-    assert(_fields.contains(name))
-    _fields = _fields.updated(name, info)
+  def fresh: ObjectRep = {
+    val obj = new ObjectRep
+    obj._fields = this._fields
+    obj._classEnvs = this._classEnvs
+    heap.add(obj)
+    obj
   }
 
-  def contains(name: Name): Boolean =
-    _fields.contains(name)
+  // in linearization order, last is current class
+  private var _classEnvs: Map[Symbol, ClassEnv] = Map()
+  def add(sym: Symbol, classEnv: ClassEnv) =
+    _classEnvs = _fields.updated(sym, classEnv)
 
-  def isAssigned(name: Name): Boolean =
-    _fields(name).assigned
+  def classEnv: Map[Symbol, ClassEnv] = _classEnvs
 
-  def setAssigned(name: Name): Unit =
-    _fields = _fields.updated(name, _fields(name).copy(assigned = true))
+  /** Fields of the object, in most cases only field name matters.
+   *
+   *  Usage of symbols make it possible to support shadowed fields.
+   *  Name resolution done elsewhere.
+   */
+  private var _fields: Map[Symbol, SymInfo] = Map()
 
-  def notAssigned = _fields.keys.filter(name => !(_fields(name).assigned))
-  def partialSyms = _fields.keys.filter(name => _fields(name).isPartial)
-  def filledSyms  = _fields.keys.filter(name => _fields(name).isFilled)
-  def forcedSyms  = _fields.keys.filter(name => _fields(name).forced)
-  def latentSyms  = _fields.keys.filter(name => _fields(name).isLatent)
+  def apply(sym: Symbol): SymInfo =
+    _fields(sym)
+
+  def add(sym: Symbol, info: SymInfo) =
+    _fields = _fields.updated(sym, info)
+
+  // object environment should not resolve outer
+  def update(sym: Symbol, info: SymInfo): Unit = {
+    assert(_fields.contains(sym))
+    _fields = _fields.updated(sym, info)
+  }
+
+  def contains(sym: Symbol): Boolean =
+    _fields.contains(sym)
+
+  def isAssigned(sym: Symbol): Boolean =
+    _fields(sym).assigned
+
+  def setAssigned(sym: Symbol): Unit =
+    _fields = _fields.updated(sym, _fields(sym).copy(assigned = true))
+
+  def notAssigned = _fields.keys.filter(sym => !(_fields(sym).assigned))
+  def partialSyms = _fields.keys.filter(sym => _fields(sym).isPartial)
+  def filledSyms  = _fields.keys.filter(sym => _fields(sym).isFilled)
+  def forcedSyms  = _fields.keys.filter(sym => _fields(sym).forced)
+  def latentSyms  = _fields.keys.filter(sym => _fields(sym).isLatent)
 
   def join(obj2: ObjectRep): ObjectRep = {
     assert(this.id == obj2.id)
 
-    _fields.foreach { case (name: Name, info: SymInfo) =>
-      assert(obj2.contains(name))
-      val info2 = obj2._fields(name)
+    _fields.foreach { case (sym: Symbol, info: SymInfo) =>
+      assert(obj2.contains(sym))
+      val info2 = obj2._fields(sym)
       // path-insensitive approximation:
       // 1. if a variable is assigned in one branch, but not in the other branch, we
       //    treat the variable as not assigned.
       // 2. a lazy variable is force if it's forced in either branch
       // 3. a variable gets the lowest possible state
       if (!info.assigned || !info2.assigned)
-        _fields = _fields.updated(name, info.copy(assigned = false, latentValue = NoLatent))
+        _fields = _fields.updated(sym, info.copy(assigned = false, latentValue = NoLatent))
       else {
         val infoRes = info.copy(
           assigned   =  true,
@@ -355,7 +372,7 @@ class ObjectRep(envId: Int, val tp: Type) extends HeapEntry with Cloneable {
           latentValue =  info.latentValue.join(info2.latentValue)
         )
 
-        _fields = _fields.updated(name, infoRes)
+        _fields = _fields.updated(sym, infoRes)
       }
     }
 

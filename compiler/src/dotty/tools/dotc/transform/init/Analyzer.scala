@@ -68,24 +68,68 @@ object Analyzer {
     }
     recur(cls, State.Partial)
   }
-
-  // TODO: should we pass context as function arguments?
-  def objectValue(id: Int, static: Boolean = false)(implicit ctx: Context) =
-    ObjectValue(
-      (sym: Symbol, heap: Heap, pos: Position) => {
-        val obj = heap(id).asInstanceOf[ObjectRep]
-        Rules.select(obj, sym, pos, static)
-      },
-      (sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position) => {
-        val obj = heap(id).asInstanceOf[ObjectRep]
-        Rules.assign(obj, sym, valInfo, pos)
-      },
-      (sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, objOpt: ObjectRep, pos: Position) => {
-        val obj = heap(id).asInstanceOf[ObjectRep]
-        Rules.init(obj, sym, valueInfos, heap, objOpt, pos)
-      }
-    )
 }
+
+class AtomObjectValue(val id: Int, analyzer: Analyzer)(implicit ctx: Context) extends ObjectValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+    val obj = heap(id).asInstanceOf[ObjectRep]
+    Rules.select(obj, sym, pos)
+  }
+
+  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
+    val obj = heap(id).asInstanceOf[ObjectRep]
+    Rules.assign(obj, sym, valInfo, pos)
+  }
+
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
+    analyzer.indexInner(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
+  }
+
+  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, objOpt: ObjectRep, pos: Position): Res = {
+    val obj = heap(id).asInstanceOf[ObjectRep]
+    Rules.init(obj, sym, valueInfos, heap, objOpt, pos)
+  }
+
+  override def hashCode = id
+
+  override def equals(that: Any) = that match {
+    case that: AtomObjectValue => that.id == id
+    case _ => false
+  }
+}
+
+class UnionObjectValue(val values: Set[AtomObjectValue]) extends ObjectValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+    values.foldLeft(Res()) { (acc, value) =>
+      value.select(sym, heap, pos).join(acc)
+    }
+  }
+
+  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
+    values.foldLeft(Res()) { (acc, value) =>
+      value.assign(sym, valInfo, heap, pos).join(acc)
+    }
+  }
+
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
+    val head :: tail = values.toList
+    val value = head.index(cls, tp, obj)
+    tail.foldLeft(value) { (acc, value) =>
+      val obj2 = obj.fresh
+      value.index(cls, tp, obj2).join(acc)
+    }
+  }
+
+  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val head :: tail = values.toList
+    val res = head.init(sym, valueInfos, heap, obj, pos)
+    tail.foldLeft(Res()) { (acc, value) =>
+      val obj2 = obj.fresh
+      value.init(sym, valueInfos, heap, obj2, pos).join(acc)
+    }
+  }
+}
+
 
 object Rules {
   def latentState(latentValue: LatentValue, heap: Heap, pos: Position): State = latentValue match {
@@ -126,20 +170,17 @@ object Rules {
     }
   }
 
-  def init(outer: ObjectRep, sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, objOpt: ObjectRep, pos: Position, env: Env): Res = {
+  def init(outer: ObjectRep, sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position, env: Env): Res = {
     val (tmpl: Template, envId) = outer.env.getTree(cls)
     val clsEnv = env.heap(envId)
     indexClass(cls, tmpl, clsEnv)
 
-    // create this object
-    val obj = if (objOpt == null) new ObjectRep(clsEnv.id, tref) else objOpt
-
     // setup this
-    val thisInfo =  Analyzer.objectValue(obj.id, static = false)
+    val thisInfo =  Analyzer.objectValue(obj.id, this)
     clsEnv.add(cls, SymInfo(state = State.Partial, latentValue = thisInfo))
 
     // setup outer this
-    val outerInfo =  Analyzer.objectValue(outer.id, static = false)
+    val outerInfo =  Analyzer.objectValue(outer.id, this)
     clsEnv.add(cls, SymInfo(latentValue = outerInfo))
 
     // setup constructor params
@@ -148,7 +189,7 @@ object Rules {
       clsEnv.add(param.symbol, SymInfo(assigned = true, state = valInfo.state, latentValue = valInfo.latentValue))
     }
 
-    checkTemplate(tmpl, clsEnv, obj)
+    checkTemplate(cls, null, tmpl, heap(clsEnv.id), obj)
   }
 
   def assign(obj: ObjectRep, sym: Symbol, valInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
@@ -517,26 +558,62 @@ class Analyzer {
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
       env.addTree(vdef.symbol,  vdef)
     case tdef: TypeDef if tdef.isClassDef  =>
-      val cls = tdef.symbol.asClass
-      val latent = MethodInfo { (valInfoFn, heap) =>
-        if (isChecking(cls)) {
-          debug(s"recursive creation of $cls found")
-          Res()
-        }
-        else checking(cls) {
-          val obj = new ObjectRep(env.id, cls.typeRef)
-          indexTemplate(cls, tmpl, obj)
-          val thisInfo =  Analyzer.objectValue(obj.id, static = true)
-          obj.env.add(cls, SymInfo(state = State.Partial, latentValue = thisInfo))
-
-          val res = checkTemplate(tmpl, obj)(ctx.withOwner(cls))
-          Res(latentValue = thisInfo, effects = res.effects, state = State.Filled)
-        }
-      }
-
-      env.add(cls.primaryConstructor, SymInfo(latentValue = latentValue))
+      env.addTree(tdef.symbol, tdef.rhs)
     case _ =>
   }
+
+  def indexTemplate(cls: ClassSymbol, tp: Type, tmpl: Template, env: Env, obj: ObjectRep): ObjectValue = {
+    // index current class environment
+    val innerEnv = env.fresh()
+    indexStats(tmpl.body, innerEnv)
+    obj.add(ClassEnv(innerEnv.id, tp))
+
+    // index parent class environments
+    val atom = new AtomObjectValue(obj.id, this)
+    cls.baseClasses.tail.foldLeft(atom) { (parent, acc) =>
+      val baseType = tp.baseType(parent)
+      indexParent(parent, baseType, env, obj).join(acc)
+    }
+
+    // do it during checking
+    // val thisInfo = Analyzer.objectValue(obj.id, static = cls.is(Final))
+    // innerEnv.add(cls, SymInfo(state = State.Partial, latentValue = thisInfo))
+  }
+
+  def indexParent(cls: ClassSymbol, tp: Type, env: Env, obj: ObjectRep)(implicit ctx: Context): ObjectValue = {
+    def toPrefix(tp: Type): TypeRef = tp match {
+      case AppliedType(tycon, _) => toPrefix(tycon.dealias)
+      case tp: TypeRef => tp
+      case _ => null
+    }
+
+    def default = Analyzer.objectValue(obj.id, this)
+
+    val tref = toPrefix(tp)
+    if (tref == null) default
+    else {
+      val prefixRes = checkRef(tref.prefix, env, parent.pos)
+      if (prefixRes.isLatent)
+        prefixRes.latentValue.asObject.index(cls, tp, obj)
+      else default
+    }
+  }
+
+  def indexInner(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): ObjectValue = {
+    val enclosingCls = cls.owner
+    if (outer.classEnv.contains(enclosingCls)) {
+      val ClassEnv(envId, _) = outer.classEnv(enclosingCls)
+      val env = outer.heap(envId)
+      val (tmpl: Template, _) = env.getTree(cls)
+
+      // don't go recursively for parents as indexing is based on linearization
+      val innerEnv = env.fresh()
+      indexStats(tmpl.body, innerEnv)
+      inner.add(ClassEnv(innerEnv.id, tp))
+    }
+    else Analyzer.objectValue(obj.id, this)
+  }
+
 
   protected var _methChecking: Set[Symbol] = Set()
   def isChecking(sym: Symbol)   = _methChecking.contains(sym)
@@ -559,27 +636,6 @@ class Analyzer {
     }
   }
 
-  def indexClass(cls: ClassSymbol, tmpl: Template, obj: ObjectRep)(implicit ctx: Context): Unit =  {
-    // already indexed, required due to laziness
-    if (obj.env.hasTree(tmpl.constr.symbol)) return
-
-    obj.env.addTree(tmpl.constr.symbol, tmpl.constr)
-
-    indexMembers(tmpl.body, obj)
-  }
-
-  /** Index local definitions */
-  def indexMembers(stats: List[Tree], obj: ObjectRep)(implicit ctx: Context): Unit = stats.foreach {
-    case ddef: DefDef =>
-      env.addTree(ddef.symbol, ddef)
-    case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      env.addTree(vdef.symbol,  vdef)
-    case tdef: TypeDef if tdef.isClassDef  =>
-      env.addTree(tdef.symbol.asClass, tdef.rhs) // be lazy here
-    case _ =>
-  }
-
-
   def checkAssign(lhs: Tree, rhs: Tree, env: Env)(implicit ctx: Context): Res = {
     val rhsRes = apply(rhs, env)
     if (rhsRes.hasErrors) return rhsRes
@@ -599,18 +655,26 @@ class Analyzer {
     }
   }
 
-  def checkParents(parents: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Res =
-    // TODO: fix ordering
-    parents.foldLeft(Res()) { (acc, parent) =>
+  def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectValue)(implicit ctx: Context): Res = {
+    val baseClasses = cls.baseClasses.tail
+    val parentsOrdered = baseClasses.map(p => parents.find(_.tpe.classSymbol `eq` p)).collect {
+      case Some(parent) => parent
+    }
+
+    val covered = mutable.Set.empty[Symbo]
+
+    parentsOrdered.foldLeft(Res()) { (acc, parent) =>
       parent match {
         case tree @ NewEx(tref, init, argss) =>
-          val res = checkInit(tref, init, argss, env, obj)
+          covered ++= tref.classSymbol.baseClasses
+          val res = checkNew(tref, init, argss, env, obj)
           acc.copy(effects = acc.effects ++ res.effects)
         case _ =>
-          // TODO
+
           Res()
       }
     }
+  }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, objOpt: ObjectRep = null)implicit ctx: Context): Res = {
     val cls = tref.classSymbol
@@ -672,7 +736,8 @@ class Analyzer {
     }
   }
 
-  def checkTemplate(tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context) = {
+  def checkTemplate(cls: ClassSymbol, tp: Type, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context) = {
+    val value = indexTemplate(cls, tp, tmpl, env, obj)
     checkParents(tmpl.parents, env, obj).join(checkStats(tmpl.body, env))
   }
 
