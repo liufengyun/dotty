@@ -410,10 +410,18 @@ object Indexing {
     def default = new AtomObjectValue(obj.id)
 
     val prefix = toPrefix(tp)
-    val prefixRes = checkRef(prefix, env, parent.pos)
-    if (prefixRes.isLatent)
-      prefixRes.latentValue.asObject.index(cls, tp, obj)
-    else default
+    if (prefix == NoPrefix) {
+      // must exist in scope
+      val (tmpl: Template, envId) = env.getTree(cls)
+      val envOuter = env.heap(envId).asInstanceOf[Env]
+      indexTemplate(cls, tp, tmpl, envOuter, obj)
+    }
+    else {
+      val prefixRes = checkRef(prefix, env, parent.pos)
+      if (prefixRes.isLatent)
+        prefixRes.latentValue.asObject.index(cls, tp, obj)
+      else default
+    }
   }
 
   def indexInner(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): ObjectValue = {
@@ -663,6 +671,7 @@ class Analyzer {
     parentsOrdered.foldLeft(Res()) { (acc, parent) =>
       parent match {
         case tree @ NewEx(tref, init, argss) =>
+          // TODO: not all of them
           covered ++= tref.classSymbol.baseClasses
           val res = checkNew(tref, init, argss, env, obj)
           acc.copy(effects = acc.effects ++ res.effects)
@@ -673,12 +682,12 @@ class Analyzer {
     }
   }
 
-  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, objOpt: ObjectRep = null)implicit ctx: Context): Res = {
+  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)implicit ctx: Context): Res = {
     val cls = tref.classSymbol
     val args = argss.flatten
 
     val prefixRes = checkRef(tref.prefix, env, parent.pos)
-    if (prefixRes.isLatent) { // env may not contain `cls`, but prefixRes may contain
+    if (prefixRes.isLatent) { // env may not contain `cls`, but prefixRes should
       // setup constructor params
       var effs = Vector.empty[Effect]
       val valInfos = args.map { arg =>
