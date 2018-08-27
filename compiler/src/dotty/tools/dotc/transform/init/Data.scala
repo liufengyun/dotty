@@ -223,6 +223,12 @@ class Env(outerId: Int) extends HeapEntry {
     env
   }
 
+  def newObject(heap: Heap = this.heap): ObjectRep = {
+    val obj = new ObjectRep
+    heap.add(obj)
+    obj
+  }
+
   def apply(sym: Symbol): SymInfo =
     if (_syms.contains(sym)) _syms(sym)
     else outer(sym)
@@ -316,6 +322,8 @@ class ObjectRep extends HeapEntry with Cloneable {
     _classEnvs = _fields.updated(sym, classEnv)
 
   def classEnv: Map[Symbol, ClassEnv] = _classEnvs
+
+  def tp: Type = _classEnvs.last.tp
 
   /** Fields of the object, in most cases only field name matters.
    *

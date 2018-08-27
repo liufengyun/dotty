@@ -65,12 +65,12 @@ class AtomObjectValue(val id: Int)(implicit ctx: Context) extends ObjectValue {
   }
 
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
-    Indexing.indexInner(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
+    Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
   }
 
-  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, objOpt: ObjectRep, pos: Position): Res = {
+  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
-    Rules.init(obj, sym, valueInfos, heap, objOpt, pos)
+    Rules.init(obj, sym, valueInfos, heap, obj, pos)
   }
 
   override def hashCode = id
@@ -172,7 +172,7 @@ object Rules {
       clsEnv.add(param.symbol, SymInfo(assigned = true, state = valInfo.state, latentValue = valInfo.latentValue))
     }
 
-    checkTemplate(cls, null, tmpl, heap(clsEnv.id), obj)
+    checkTemplate(cls, obj.tp, tmpl, heap(clsEnv.id), obj)
   }
 
   def assign(obj: ObjectRep, sym: Symbol, valInfo: ValueInfo, pos: Position)(implicit ctx: Context): Res =
@@ -393,15 +393,11 @@ object Indexing {
     val atom = new AtomObjectValue(obj.id)
     cls.baseClasses.tail.foldLeft(atom) { (parent, acc) =>
       val baseType = tp.baseType(parent)
-      indexParent(parent, baseType, env, obj).join(acc)
+      indexClass(parent, baseType, env, obj).join(acc)
     }
-
-    // do it during checking
-    // val thisInfo = Analyzer.objectValue(obj.id, static = cls.is(Final))
-    // innerEnv.add(cls, SymInfo(state = State.Partial, latentValue = thisInfo))
   }
 
-  def indexParent(cls: ClassSymbol, tp: Type, env: Env, obj: ObjectRep)(implicit ctx: Context): ObjectValue = {
+  def indexClass(cls: ClassSymbol, tp: Type, env: Env, obj: ObjectRep)(implicit ctx: Context): ObjectValue = {
     def toPrefix(tp: Type): TypeRef = tp match {
       case AppliedType(tycon, _) => toPrefix(tycon.dealias)
       case tp: TypeRef => tp.prefix
@@ -414,7 +410,10 @@ object Indexing {
       // must exist in scope
       val (tmpl: Template, envId) = env.getTree(cls)
       val envOuter = env.heap(envId).asInstanceOf[Env]
-      indexTemplate(cls, tp, tmpl, envOuter, obj)
+
+      val innerEnv = envOuter.fresh()
+      indexStats(tmpl.body, innerEnv)
+      obj.add(ClassEnv(innerEnv.id, tp))
     }
     else {
       val prefixRes = checkRef(prefix, env, parent.pos)
@@ -424,7 +423,7 @@ object Indexing {
     }
   }
 
-  def indexInner(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): ObjectValue = {
+  def indexInnerClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): ObjectValue = {
     val enclosingCls = cls.owner
     if (outer.classEnv.contains(enclosingCls)) {
       val ClassEnv(envId, _) = outer.classEnv(enclosingCls)
@@ -673,7 +672,7 @@ class Analyzer {
         case tree @ NewEx(tref, init, argss) =>
           // TODO: not all of them
           covered ++= tref.classSymbol.baseClasses
-          val res = checkNew(tref, init, argss, env, obj)
+          val res = checkInit(tref, init, argss, env, obj)
           acc.copy(effects = acc.effects ++ res.effects)
         case _ =>
 
@@ -682,7 +681,7 @@ class Analyzer {
     }
   }
 
-  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)implicit ctx: Context): Res = {
+  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)implicit ctx: Context): Res = {
     val cls = tref.classSymbol
     val args = argss.flatten
 
@@ -696,7 +695,63 @@ class Analyzer {
         res.valueInfo
       }
 
-      prefixRes.latentValue.asObject.init(cls, valInfos, env.heap, objOpt, tree.pos)
+      val obj = env.newObject
+
+      // index parent class environments
+      val atom = new AtomObjectValue(obj.id)
+      cls.baseClasses.tail.foldLeft(atom) { (parent, acc) =>
+        val baseType = tree.tpe.baseType(parent)
+        indexClass(parent, baseType, env, obj).join(acc)
+      }
+
+      // index current class
+      prefixRes.latentValue.asObject.index(cls, tree.tp, obj)
+
+      prefixRes.latentValue.asObject.init(cls, valInfos, env.heap, obj, tree.pos)
+    }
+    else { // type checking
+      val clsRes = Rules.select(prefixRes, cls, env.heap, parent.pos)
+      if (clsRes.hasErrors) return clsRes
+
+      val paramInfos = init.widen.paramInfoss.flatten
+
+      // check params
+      var effs = Vector.empty[Effect]
+      val valInfos = args.map { arg =>
+        val res = apply(arg, env)
+        effs = effs ++ res.effects
+
+        if (res.isLatent)
+          res.state = Rules.latentState(res.latentValue, env.heap, arg.pos)
+
+        res.valueInfo
+      }
+
+      if (effs.size > 0) return Res(effects = effs)
+
+      val paramRes = checkParams(cls, valInfos, paramInfos, env, args.map(_.pos))
+      if (paramRes.hasErrors) return paramRes
+
+      if (!prefixRes.isFull || valInfos.exists(v => !v.isFull)) Res(state = State.Filled)
+      else Res(state = State.Full)
+    }
+  }
+
+  def checkInit(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)implicit ctx: Context): Res = {
+    val cls = tref.classSymbol
+    val args = argss.flatten
+
+    val prefixRes = checkRef(tref.prefix, env, parent.pos)
+    if (prefixRes.isLatent) { // env may not contain `cls`, but prefixRes should
+      // setup constructor params
+      var effs = Vector.empty[Effect]
+      val valInfos = args.map { arg =>
+        val res = apply(arg, env)
+        effs = effs ++ res.effects
+        res.valueInfo
+      }
+
+      prefixRes.latentValue.asObject.init(cls, valInfos, env.heap, obj, tree.pos)
     }
     else { // type checking
       val clsRes = Rules.select(prefixRes, cls, env.heap, parent.pos)
@@ -743,7 +798,6 @@ class Analyzer {
   }
 
   def checkTemplate(cls: ClassSymbol, tp: Type, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context) = {
-    val value = indexTemplate(cls, tp, tmpl, env, obj)
     checkParents(tmpl.parents, env, obj).join(checkStats(tmpl.body, env))
   }
 

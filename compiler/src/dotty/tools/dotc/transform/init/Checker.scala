@@ -149,7 +149,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   }
 
   def setupConstructorEnv(env: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
-    val obj = new ObjectRep
+    val obj = env.newObject
 
     // for recursive usage
     env.addTree(cls, tmpl)
