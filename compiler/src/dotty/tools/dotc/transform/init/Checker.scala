@@ -154,10 +154,9 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     // for recursive usage
     env.addTree(cls, tmpl)
 
-    analyzer.indexTemplate(cls, cls.typeRef, tmpl, env, obj)
-    analyzer.initObject(cls, tmpl, obj)
-
-    Analyzer.addOuterThis(cls, env)
+    Indexing.indexTemplate(cls, cls.typeRef, tmpl, env, obj)
+    Indexing.initObject(cls, tmpl, obj)
+    Indexing.indexOuter(cls, env)
 
     obj
   }
