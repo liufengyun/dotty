@@ -99,20 +99,17 @@ class Heap extends Cloneable {
 }
 
 //=======================================
-//           latent values
+//             values
 //=======================================
 
-sealed trait LatentValue {
-  def asFunction: FunctionValue = this.asInstanceOf[FunctionValue]
-  def asObject: ObjectValue = this.asInstanceOf[ObjectValue]
-  def isFunction: Boolean = this.isInstanceOf[FunctionValue]
-  def isObject: Boolean = !isFunction
+sealed trait Value {
+  def apply(params: List[Value], heap: Heap): Res
+  def select(sym: Symbol, heap: Heap, pos: Position): Res
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res
 
-  def exists: Boolean = true
-
-  def join(other: LatentValue): LatentValue = (this, other) match {
-    case (NoLatent, _) => other
-    case (_, NoLatent) => this
+  def join(other: Value): Value = (this, other) match {
     case (m1: FunctionValue, m2: FunctionValue) =>
       FunctionValue {
         (fn: Int => ValueInfo, heap: Heap) => {
@@ -135,52 +132,105 @@ sealed trait LatentValue {
   }
 }
 
-object NoLatent extends LatentValue {
-  override def exists: Boolean = false
+class UnionValue(val values: Set[Value]) extends Value {
+  def apply(params: List[Value], heap: Heap): Res = {
+    values.foldLeft(Res()) { (acc, value) =>
+      value.apply(sym, heap, pos).join(acc)
+    }
+  }
+
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+    values.foldLeft(Res()) { (acc, value) =>
+      value.select(sym, heap, pos).join(acc)
+    }
+  }
+
+  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
+    values.foldLeft(Res()) { (acc, value) =>
+      value.assign(sym, valInfo, heap, pos).join(acc)
+    }
+  }
+
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
+    val head :: tail = values.toList
+    val value = head.index(cls, tp, obj)
+    tail.foldLeft(value) { (acc, value) =>
+      val obj2 = obj.fresh
+      value.index(cls, tp, obj2).join(acc)
+    }
+  }
+
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val head :: tail = values.toList
+    val res = head.init(sym, valueInfos, heap, obj, pos)
+    tail.foldLeft(Res()) { (acc, value) =>
+      val obj2 = obj.fresh
+      value.init(sym, constr, valueInfos, heap, obj2, pos).join(acc)
+    }
+  }
 }
 
-case class FunctionValue(apply: (Int => ValueInfo, Heap) => Res) extends LatentValue
+class OpaqueValue(val state: Int) extends Value {
+  def isPartial = this == OpaqueValue.Partial
+  def isFilled  = this == OpaqueValue.Filled
+  def isFull    = this == OpaqueValue.Full
 
-trait ObjectValue extends LatentValue {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res
-  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res
+  def join(other: OpaqueValue): OpaqueValue = new OpaqueValue(Math.min(state, other.state))
+
+  def <(other: OpaqueValue): Boolean = this.state < other.state
 }
 
-class State(val state: Int) {
-  def isPartial = this == State.Partial
-  def isFilled  = this == State.Filled
-  def isFull    = this == State.Full
+object OpaqueValue {
+  val Partial = new OpaqueValue(1)
+  val Filled  = new OpaqueValue(2)
+  val Full    = new OpaqueValue(3)
 
-  def join(other: State): State = new State(Math.min(state, other.state))
-
-  def <(other: State): Boolean = this.state < other.state
+  def max(s1: OpaqueValue, s2: OpaqueValue): OpaqueValue =
+    new OpaqueValue(Math.max(s1.state, s2.state))
 }
 
-object State {
-  val Partial = new State(1)
-  val Filled  = new State(2)
-  val Full    = new State(3)
+sealed trait TransparentValue
 
-  def max(s1: State, s2: State): State = new State(Math.max(s1.state, s2.state))
+case class FunctionValue(apply: (Int => ValueInfo, Heap) => Res) extends TransparentValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+    assert(sym.name.toString == "apply")
+    Res(value = this)
+  }
+
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res
 }
 
-case class ValueInfo(state: State = State.Full, latentValue: LatentValue = NoLatent) {
-  def isPartial = state.isPartial
-  def isFilled  = state.isFilled
-  def isFull    = state.isFull
+class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+    val obj = heap(id).asInstanceOf[ObjectRep]
+    Rules.select(obj, sym, pos)
+  }
 
-  def isLatent  = latentValue.exists
+  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
+    val obj = heap(id).asInstanceOf[ObjectRep]
+    Rules.assign(obj, sym, valInfo, pos)
+  }
+
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
+    Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
+  }
+
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val self = heap(id).asInstanceOf[ObjectRep]
+    Rules.init(self, sym, constr, valueInfos, heap, obj, pos)
+  }
+
+  override def hashCode = id
+
+  override def equals(that: Any) = that match {
+    case that: AtomObjectValue => that.id == id
+    case _ => false
+  }
 }
 
-case class SymInfo(assigned: Boolean = true, forced: Boolean = false, state: State = State.Full, latentValue: LatentValue = NoLatent) {
-  def isPartial = assigned && state.isPartial
-  def isFilled  = assigned && state.isFilled
-  def isFull    = assigned && state.isFull
-
-  def isLatent  = latentValue.exists
-}
+case class SymInfo(assigned: Boolean = true, forced: Boolean = false, value: Value)
 
 //=======================================
 //           environment
@@ -192,7 +242,7 @@ case class SymInfo(assigned: Boolean = true, forced: Boolean = false, state: Sta
   *
   *  Invariants:
   *  1. the data stored in the immutable map must be immutable
-  *  2. environment refer each other via `id`, which implies LatentValue should
+  *  2. environment refer each other via `id`, which implies TransparentValue should
   *     never use captured environment other than its `id`.
   */
 class Env(outerId: Int) extends HeapEntry {
@@ -254,7 +304,7 @@ class Env(outerId: Int) extends HeapEntry {
   def partialSyms = _syms.keys.filter(sym => _syms(sym).isPartial)
   def filledSyms  = _syms.keys.filter(sym => _syms(sym).isFilled)
   def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
-  def latentSyms  = _syms.keys.filter(sym => _syms(sym).isLatent)
+  def transparentSyms  = _syms.keys.filter(sym => _syms(sym).isTransparent)
 
   def join(env2: Env): Env = {
     assert(this.id == env2.id)
@@ -268,13 +318,13 @@ class Env(outerId: Int) extends HeapEntry {
       // 2. a lazy variable is force if it's forced in either branch
       // 3. a variable gets the lowest possible state
       if (!info.assigned || !info2.assigned)
-        _syms = _syms.updated(sym, info.copy(assigned = false, latentValue = NoLatent))
+        _syms = _syms.updated(sym, info.copy(assigned = false, transparentValue = NoTransparent))
       else {
         val infoRes = info.copy(
           assigned   =  true,
           forced     =  info.forced || info2.forced,
           state      =  info.state.join(info2.state),
-          latentValue =  info.latentValue.join(info2.latentValue)
+          transparentValue =  info.transparentValue.join(info2.transparentValue)
         )
         _syms = _syms.updated(sym, infoRes)
       }
@@ -291,7 +341,7 @@ class Env(outerId: Int) extends HeapEntry {
         ~ | partial: ${partialSyms}
         ~ | filled: ${filledSyms}
         ~ | lazy forced:  ${forcedSyms}
-        ~ | latent symbols: ${latentSyms}"""
+        ~ | transparent symbols: ${transparentSyms}"""
     .stripMargin('~')
 }
 
@@ -357,7 +407,7 @@ class ObjectRep extends HeapEntry with Cloneable {
   def partialSyms = _fields.keys.filter(sym => _fields(sym).isPartial)
   def filledSyms  = _fields.keys.filter(sym => _fields(sym).isFilled)
   def forcedSyms  = _fields.keys.filter(sym => _fields(sym).forced)
-  def latentSyms  = _fields.keys.filter(sym => _fields(sym).isLatent)
+  def transparentSyms  = _fields.keys.filter(sym => _fields(sym).isTransparent)
 
   def join(obj2: ObjectRep): ObjectRep = {
     assert(this.id == obj2.id)
@@ -371,13 +421,12 @@ class ObjectRep extends HeapEntry with Cloneable {
       // 2. a lazy variable is force if it's forced in either branch
       // 3. a variable gets the lowest possible state
       if (!info.assigned || !info2.assigned)
-        _fields = _fields.updated(sym, info.copy(assigned = false, latentValue = NoLatent))
+        _fields = _fields.updated(sym, info.copy(assigned = false, transparentValue = NoTransparent))
       else {
         val infoRes = info.copy(
           assigned   =  true,
           forced     =  info.forced || info2.forced,
-          state      =  info.state.join(info2.state),
-          latentValue =  info.latentValue.join(info2.latentValue)
+          value      =  info.value.join(info2.value)
         )
 
         _fields = _fields.updated(sym, infoRes)
@@ -394,7 +443,7 @@ class ObjectRep extends HeapEntry with Cloneable {
         ~ | partial: ${partialSyms}
         ~ | filled: ${filledSyms}
         ~ | lazy forced:  ${forcedSyms}
-        ~ | latent symbols: ${latentSyms}
+        ~ | transparent symbols: ${transparentSyms}
         ~ | class: $tp"""
     .stripMargin('~')
 }
@@ -404,47 +453,25 @@ class ObjectRep extends HeapEntry with Cloneable {
 //=======================================
 import Effect._
 
-case class Res(var effects: Effects = Vector.empty, var state: State = State.Full, var latentValue: LatentValue = NoLatent) {
-  def isLatent  = latentValue != NoLatent
-
-  def isPartial = state == State.Partial
-  def isFilled  = state == State.Filled
-  def isFull    = state == State.Full
-
+case class Res(var effects: Effects = Vector.empty, var value: Value = OpaqueValue.Full) {
   def +=(eff: Effect): Unit = effects = effects :+ eff
   def ++=(effs: Effects) = effects ++= effs
 
   def hasErrors  = effects.size > 0
 
   def join(res2: Res): Res =
-    if (!isLatent) {
-      res2 ++= this.effects
-      res2.state = res2.state.join(this.state)
-      res2
-    }
-    else if (!res2.isLatent) {
-      this ++= res2.effects
-      this.state = res2.state.join(this.state)
-      this
-    }
-    else Res(
-      effects    = res2.effects ++ this.effects,
-      state      = res2.state.join(this.state),
-      latentValue = res2.latentValue.join(latentValue)
+    Res(
+      effects = res2.effects ++ this.effects,
+      value   = res2.value.join(value)
     )
-
-  def valueInfo: ValueInfo = ValueInfo(state = state, latentValue = latentValue)
 
   override def toString: String =
     s"""~Res(
         ~| effects = ${if (effects.isEmpty) "()" else effects.mkString("\n|    - ", "\n|    - ", "")}
-        ~| partial = $isPartial
-        ~| filled  = $isFilled
-        ~| latent  = $latentValue
+        ~| value   = $value
         ~)"""
     .stripMargin('~')
 }
-
 
 //=======================================
 //             Effects
@@ -469,8 +496,8 @@ sealed trait Effect {
     case UseAbstractDef(sym, pos)  =>
       ctx.warning(s"`@scala.annotation.init` is recommended for abstract $sym for safe initialization", sym.pos)
       ctx.warning(s"Reference to abstract $sym which should be annotated with `@scala.annotation.init`", pos)
-    case Latent(tree, effs)  =>
-      ctx.warning(s"Latent effects results in initialization errors", tree.pos)
+    case Transparent(tree, effs)  =>
+      ctx.warning(s"Transparent effects results in initialization errors", tree.pos)
       effs.foreach(_.report)
     case Generic(msg, pos) =>
       ctx.warning(msg, pos)
@@ -484,7 +511,7 @@ case class Call(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect
 case class Force(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect    // force lazy val results in error
 case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Effect // create new instance of in-scope inner class results in error
 case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
-case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
+case class Transparent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic transparent effects (e.g. effects of closures)
 case class Generic(msg: String, pos: Position) extends Effect                     // generic problem
 
 object Effect {

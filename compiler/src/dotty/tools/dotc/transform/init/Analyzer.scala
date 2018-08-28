@@ -53,67 +53,6 @@ object Analyzer {
     sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
 }
 
-class AtomObjectValue(val id: Int)(implicit ctx: Context) extends ObjectValue {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
-    val obj = heap(id).asInstanceOf[ObjectRep]
-    Rules.select(obj, sym, pos)
-  }
-
-  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
-    val obj = heap(id).asInstanceOf[ObjectRep]
-    Rules.assign(obj, sym, valInfo, pos)
-  }
-
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
-    Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
-  }
-
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
-    val self = heap(id).asInstanceOf[ObjectRep]
-    Rules.init(self, sym, constr, valueInfos, heap, obj, pos)
-  }
-
-  override def hashCode = id
-
-  override def equals(that: Any) = that match {
-    case that: AtomObjectValue => that.id == id
-    case _ => false
-  }
-}
-
-class UnionObjectValue(val values: Set[AtomObjectValue]) extends ObjectValue {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
-    values.foldLeft(Res()) { (acc, value) =>
-      value.select(sym, heap, pos).join(acc)
-    }
-  }
-
-  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
-    values.foldLeft(Res()) { (acc, value) =>
-      value.assign(sym, valInfo, heap, pos).join(acc)
-    }
-  }
-
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
-    val head :: tail = values.toList
-    val value = head.index(cls, tp, obj)
-    tail.foldLeft(value) { (acc, value) =>
-      val obj2 = obj.fresh
-      value.index(cls, tp, obj2).join(acc)
-    }
-  }
-
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
-    val head :: tail = values.toList
-    val res = head.init(sym, valueInfos, heap, obj, pos)
-    tail.foldLeft(Res()) { (acc, value) =>
-      val obj2 = obj.fresh
-      value.init(sym, constr, valueInfos, heap, obj2, pos).join(acc)
-    }
-  }
-}
-
-
 object Rules {
   def latentState(latentValue: LatentValue, heap: Heap, pos: Position): State = latentValue match {
     case mtLatent: MethodInfo =>
