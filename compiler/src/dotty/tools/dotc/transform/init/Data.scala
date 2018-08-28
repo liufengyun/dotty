@@ -104,7 +104,7 @@ class Heap extends Cloneable {
 /** Abstract values in analysis */
 sealed trait Value {
   /** Apply a method or function to the provided arguments */
-  def apply(params: List[Value], heap: Heap): Res
+  def apply(params: Int => Value, heap: Heap): Res
 
   /** Select a member on a value */
   def select(sym: Symbol, heap: Heap, pos: Position): Res
@@ -116,38 +116,72 @@ sealed trait Value {
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value
 
   /** Execute the constructor of an inner class for the fresh object `obj` */
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res
 
   def join(other: Value): Value = (this, other) match {
+    case (v1: OpaqueValue, v2: OpaqueValue)     =>
+      OpaqueValue(Math.min(state, other.state))
     case (m1: FunctionValue, m2: FunctionValue) =>
-      FunctionValue {
-        (fn: Int => ValueInfo, heap: Heap) => {
-          val res1 = m1.apply(fn, heap)
-          val res2 = m2.apply(fn, heap)
-          res1.join(res2)
-        }
-      }
-    case (o1: AtomObjectValue, o2: AtomObjectValue) =>
+      UnionValue(Set(m1, m2))
+    case (o1: ObjectValue, o2: ObjectValue) =>
       if (o1.id == o2.id) o1
-      else new UnionObjectValue(Set(o1, o2))
-    case (o1: UnionObjectValue, o2: UnionObjectValue) =>
-      new UnionObjectValue(o1.values ++ o2.values)
-    case (o1: UnionObjectValue, o2: AtomObjectValue) =>
-      new UnionObjectValue(o1.values + o2)
-    case (o1: AtomObjectValue, o2: UnionObjectValue) =>
-      new UnionObjectValue(o2.values + o1)
+      else new UnionValue(Set(o1, o2))
+    case (v1: UnionValue, v2: UnionValue) =>
+      v1 ++ v2
+    case (uv: UnionValue, v: Value) =>
+      uv + v
+    case (v: Value, uv: UnionValue) =>
+      uv + v
+    case (v1, v2) =>
+      UnionValue(Set(v1, v2))
     case _ =>
       throw new Exception(s"Can't join $this and $other")
   }
+
+  /** Widen the value to an opaque value
+   *
+   *  Widening is needed at analysis boundary.
+   */
+  def widen(heap: Heap, pos: Position): OpaqueValue = {
+    val testHeap = heap.clone
+    def recur(value: Value): OpaqueValue = value match {
+      case ov: OpaqueValue => ov
+      case fv: FunctionValue =>
+        val res = fv(FullValue, testHeap)
+        if (res.hasErrors) FilledValue
+        else recur(res.value)
+      case obj: ObjectValue =>
+        FilledValue
+      case UnionValue(vs) =>
+        vs.foldLeft(FullValue) { (v, acc) =>
+          if (v == PartialValue) return PartialValue
+          else recur(v).join(acc)
+        }
+    }
+
+    recur(this)
+  }
+
+  def checkParams(sym: Symbol, values: List[Value], paramInfos: List[Type], env: Env, positions: List[Position])(implicit ctx: Context): Res = {
+    def paramState(index: Int) = Analyzer.typeState(paramInfos(index))
+
+    values.zipWithIndex.foreach { case (value, index) =>
+      if (valInfo.widen < paramState(index))
+        return Res(effects = Vector(Generic("Leak of object under initialization to " + sym, positions(index))))
+    }
+
+    Res()
+  }
+
 }
 
 trait SingleValue extends Value
 
 /** Union of values */
-class UnionValue(val values: List[SingleValue]) extends Value {
-  def apply(params: List[Value], heap: Heap): Res = {
+case class UnionValue(val values: Set[SingleValue]) extends Value {
+  def apply(params: Int => Value, heap: Heap): Res = {
     values.foldLeft(Res()) { (acc, value) =>
-      value.apply(sym, heap, pos).join(acc)
+      value.apply(params, heap, pos).join(acc)
     }
   }
 
@@ -157,13 +191,13 @@ class UnionValue(val values: List[SingleValue]) extends Value {
     }
   }
 
-  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
+  def assign(sym: Symbol, valInfo: Value, heap: Heap, pos: Position): Res = {
     values.foldLeft(Res()) { (acc, value) =>
       value.assign(sym, valInfo, heap, pos).join(acc)
     }
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = {
     val head :: tail = values.toList
     val value = head.index(cls, tp, obj)
     tail.foldLeft(value) { (acc, value) =>
@@ -172,42 +206,141 @@ class UnionValue(val values: List[SingleValue]) extends Value {
     }
   }
 
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = {
     val head :: tail = values.toList
-    val res = head.init(sym, valueInfos, heap, obj, pos)
+    val res = head.init(sym, values, heap, obj, pos)
     tail.foldLeft(Res()) { (acc, value) =>
       val obj2 = obj.fresh
-      value.init(sym, constr, valueInfos, heap, obj2, pos).join(acc)
+      value.init(sym, constr, values, argPos, heap, obj2, pos).join(acc)
     }
   }
+
+  def +(value: Value): UnionValue = UnionValue(values + value)
+  def ++(uv: UnionValue): UnionValue = UnionValue(values + uv.values)
 }
 
 /** Values that are subject to type checking rather than analysis */
-class OpaqueValue(val state: Int) extends SingleValue {
-  def isPartial = this == OpaqueValue.Partial
-  def isFilled  = this == OpaqueValue.Filled
-  def isFull    = this == OpaqueValue.Full
+sealed class OpaqueValue extends SingleValue {
+  def apply(params: Int => Value, heap: Heap): Res = {
+    assert(this == FullValue)
+    Res()
+  }
 
-  def join(other: OpaqueValue): OpaqueValue = new OpaqueValue(Math.min(state, other.state))
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = obj
 
-  def <(other: OpaqueValue): Boolean = this.state < other.state
+  def <(that: OpaqueValue): Boolean = (this, that) match {
+    case (FullValue, _) => false
+    case (FilledValue, PartialValue | FilledValue) => false
+    case (PartialValue, PartialValue) => false
+    case _ => true
+  }
+
+  def join(that: OpaqueValue): OpaqueValue =
+    if (this < that) this else that
+}
+
+/** Values that are subject to analysis rather than type checking */
+sealed trait TransparentValue extends SingleValue
+
+object FullValue extends OpaqueValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = Res()
+
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res =
+    if (!value.widen(heap, pos).isFull)
+      Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
+    else Res()
+
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val paramInfos = init.widen.paramInfoss.flatten
+    val paramRes = checkParams(cls, values, paramInfos, env, argPos))
+    if (paramRes.hasErrors) return paramRes
+
+    val partial = values.exists(_.widen < FullValue)
+    if (partial) Res(value = FilledValue) else Res()
+  }
+}
+
+object PartialValue extends OpaqueValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+    val res = Res()
+
+    if (sym.is(Method)) {
+      if (!Analyzer.isPartial(sym))
+        res += Generic(s"The $sym should be marked as `@partial` in order to be called", pos)
+    }
+    else if (sym.is(Lazy)) {
+      if (!Analyzer.isPartial(sym))
+        res += Generic(s"The lazy field $sym should be marked as `@partial` in order to be accessed", pos)
+    }
+    else {  // field select
+      if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
+        res += Generic(s"Cannot access field $sym on a partial object", pos)
+    }
+
+    // set state to Full, don't report same error message again
+    Res(state = State.Full, effects = res.effects)
+  }
+
+  /** assign to partial is always fine? */
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = Res()
+
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val paramInfos = init.widen.paramInfoss.flatten
+    val paramRes = checkParams(cls, values, paramInfos, env, argPos))
+    if (paramRes.hasErrors) return paramRes
+
+    // check @annotation
+    if (!Analyzer.isPartial(sym))
+      Res(effects = Generic(s"The nested $sym should be marked as `@partial` in order to be instantiated", pos))
+    else
+      Res(value = FilledValue)
+  }
+}
+
+object FilledValue extends OpaqueValue {
+  def select(sym: Symbol, heap: Heap, pos: Position): Res =
+    if (sym.is(Method)) {
+      if (!Analyzer.isPartial(sym) && !Analyzer.isFilled(sym))
+        res += Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)
+
+      Res(state = State.Full, effects = res.effects)
+    }
+    else if (sym.is(Lazy)) {
+      if (!Analyzer.isPartial(sym) && !Analyzer.isFilled(sym))
+        res += Generic(s"The lazy field $sym should be marked as `@partial` or `@filled` in order to be accessed", pos)
+
+      Res(state = Analyzer.typeState(sym.info), effects = res.effects)
+    }
+    else if (sym.isClass) {
+      if (!Analyzer.isPartial(sym) && !Analyzer.isFilled(sym))
+        res += Generic(s"The nested $sym should be marked as `@partial` or `@filled` in order to be instantiated", pos)
+
+      Res(effects = res.effects)
+    }
+    else {
+      Res(state = Analyzer.typeState(sym.info), effects = res.effects)
+    }
+
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res =
+    if (value.widen(heap, pos) < Analyzer.typeState(sym.info))
+      Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", pos)))
+    Res()
+
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    ???
+  }
 }
 
 object OpaqueValue {
   val Partial = new OpaqueValue(1)
   val Filled  = new OpaqueValue(2)
   val Full    = new OpaqueValue(3)
-
-  def max(s1: OpaqueValue, s2: OpaqueValue): OpaqueValue =
-    new OpaqueValue(Math.max(s1.state, s2.state))
 }
 
-/** Values that are subject to analysis rather than type checking */
-sealed trait TransparentValue extends SingleValue
 
 /** A function value or value of method select */
-case class FunctionValue(fun: (List[Value], Heap) => Res) extends TransparentValue {
-  def apply(params: List[Value], heap: Heap): Res = fun(params, heap)
+case class FunctionValue(fun: Int => Value, Heap) => Res) extends TransparentValue {
+  def apply(params: Int => Value, heap: Heap): Res = fun(params, heap)
 
   def select(sym: Symbol, heap: Heap, pos: Position): Res = {
     assert(sym.name.toString == "apply")
@@ -217,31 +350,133 @@ case class FunctionValue(fun: (List[Value], Heap) => Res) extends TransparentVal
   /** not supported */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = ???
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res = ???
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = ???
 }
 
 /** An object value */
-class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
+class ObjectValue(val id: Int, val open: Boolean = true)(implicit ctx: Context) extends TransparentValue {
   /** not supported, impossible to apply an object value */
-  def apply(params: List[Value], heap: Heap): Res = ???
+  def apply(params: Int => Value, heap: Heap): Res = ???
+
+  // TODO: handle order to resolution
+  private def resolveParent(obj: ObjectRep, sym: Symbol)(implicit ctx: Context): Res = {
+    debug(s"resolving $sym on ${obj.classSymbol}")
+    debug(obj.toString)
+    var res: Res = null
+    obj.classSymbol.classParents.foreach { parentTp =>
+      val cls = parentTp.classSymbol
+      if (parentTp.member(sym.name).exists) {
+        val info = obj(cls)
+
+        if (res == null || info.isLatent)
+          res = Res(state = info.state, latentValue = info.latentValue)
+      }
+    }
+
+    if (res != null) res
+    else if (sym.isConstructor) Res() // constructors are handled specially, see `checkNew`
+    else if (obj.classSymbol.info.memberInfo(sym).exists) { // self annotation
+      // TODO: possibility to refine based on `sym.owner` is class or trait
+      Res(state = State.Partial)
+    }
+    else {
+      debug(obj.toString)
+      throw new Exception(s"Can't resolve $sym on class ${obj.classSymbol}")
+    }
+  }
 
   def select(sym: Symbol, heap: Heap, pos: Position): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
-    Rules.select(obj, sym, pos)
+    if (obj.contains(sym)) {
+      val symInfo = obj(sym)
+      if (sym.is(Lazy)) {
+        if (!symInfo.forced) {
+          val res = symInfo.value(i => FullValue, obj.heap)
+          obj(sym) = symInfo.copy(forced = true, value = res.value)
+
+          if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
+          else Res(value = res.value)
+        }
+        else Res(value = symInfo.value)
+      }
+      else if (sym.is(Method)) {
+        val res =
+          if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
+            val res2 = symInfo.value(Nil, env.heap)
+
+            if (res2.effects.nonEmpty)
+              res2.effects = Vector(Call(sym, res2.effects, pos))
+
+            res2
+          }
+          else Res(value = symInfo.Value)
+
+        if (open && !sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
+          res += OverrideRisk(sym, pos)
+
+        res
+      }
+      else if (sym.isClass) {
+        Res(value = obj(sym).value)
+      }
+      else {
+        var effs = Vector.empty[Effect]
+        if (!symInfo.assigned) effs = effs :+ Uninit(sym, pos)
+
+        val res = Res(effects = effs, state = symInfo.state, latentValue = symInfo.latentValue)
+
+        if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
+          res += UseAbstractDef(sym, pos)
+
+        res
+      }
+    }
+    else {
+      val res = resolveParent(obj, sym)
+      res.value.select(sym, obj.heap, pos)
+    }
   }
 
-  def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res = {
+  def assign(sym: Symbol, valInfo: Value, heap: Heap, pos: Position): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
-    Rules.assign(obj, sym, valInfo, pos)
+    if (obj.contains(sym)) {
+      obj(sym) = SymInfo(
+        assigned = true,
+        state = valInfo.state,
+        latentValue = valInfo.latentValue
+      )
+      Res()
+    }
+    else {
+      val parentRes = Rules.resolveParent(obj, sym)
+      assign(parentRes, sym, valInfo, obj.heap, pos)
+    }
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue = {
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = {
     Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
   }
 
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res = {
-    val self = heap(id).asInstanceOf[ObjectRep]
-    Rules.init(self, sym, constr, valueInfos, heap, obj, pos)
+  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val outer = heap(id).asInstanceOf[ObjectRep]
+    val (tmpl: Template, envId) = outer.classEnv(sym.owner).getTree(cls)
+    val clsEnv = env.heap(envId)
+
+    // setup this
+    val thisInfo =  new ObjectValue(obj.id)
+    clsEnv.add(cls, SymInfo(state = State.Partial, latentValue = thisInfo))
+
+    // setup outer this
+    val outerInfo =  new AtomObjectValue(outer.id)
+    clsEnv.add(cls, SymInfo(latentValue = outerInfo))
+
+    // setup constructor params
+    tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+      val valInfo = valueInfos(index)
+      clsEnv.add(param.symbol, SymInfo(assigned = true, state = valInfo.state, latentValue = valInfo.latentValue))
+    }
+
+    checkTemplate(cls, obj.tp, tmpl, heap(clsEnv.id), obj)
   }
 
   override def hashCode = id
@@ -315,14 +550,6 @@ class Env(outerId: Int) extends HeapEntry {
 
   def contains(sym: Symbol): Boolean = _syms.contains(sym) || outer.contains(sym)
 
-  def isAssigned(sym: Symbol): Boolean =
-    if (_syms.contains(sym)) _syms(sym).assigned
-    else outer.isAssigned(sym)
-
-  def setAssigned(sym: Symbol): Unit =
-    if (_syms.contains(sym)) _syms = _syms.updated(sym, _syms(sym).copy(assigned = true))
-    else outer.setAssigned(sym)
-
   def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
   def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
 
@@ -351,6 +578,52 @@ class Env(outerId: Int) extends HeapEntry {
 
     this
   }
+
+  /** Assign to a local variable, i.e. TermRef with NoPrefix */
+  def assign(sym: Symbol, value: Value, pos: Position)(implicit ctx: Context): Res =
+    if (this.contains(sym)) {
+      this(sym) = SymInfo(assigned = true, state = valueInfo.state, latentValue = valueInfo.latentValue)
+      Res()
+    }
+    else if (value.widen != FullValue) // leak assign
+      Res(effects = Vector(Generic("Cannot leak an object under initialization", pos)))
+    else Res()
+
+
+  /** Select a local variable, i.e. TermRef with NoPrefix */
+  def select(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
+    if (this.contains(sym)) {
+      val symInfo = this(sym)
+      if (sym.is(Lazy)) {
+        if (!symInfo.forced) {
+          val res = symInfo.value(i => FullValue, this.heap)
+          this(sym) = symInfo.copy(forced = true, value = res.value)
+
+          if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
+          else Res(value = res.value)
+        }
+        else Res(value = symInfo.value)
+      }
+      else if (sym.is(Method)) {
+        if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
+          val res2 = symInfo.value(i => FullValue, this.heap)
+
+          if (res2.effects.nonEmpty)
+            res2.effects = Vector(Call(sym, res2.effects, pos))
+
+          res2
+        }
+        else Res(value = symInfo.value)
+      }
+      else {
+        var effs = Vector.empty[Effect]
+        if (!symInfo.assigned) effs = effs :+ Uninit(sym, pos)
+
+        Res(effects = effs, value = symInfo.value)
+      }
+    }
+    else Res()
+
 
   override def toString: String =
     (if (outerId > 0) outer.toString + "\n" else "") ++
@@ -413,17 +686,8 @@ class ObjectRep extends HeapEntry with Cloneable {
   def contains(sym: Symbol): Boolean =
     _fields.contains(sym)
 
-  def isAssigned(sym: Symbol): Boolean =
-    _fields(sym).assigned
-
-  def setAssigned(sym: Symbol): Unit =
-    _fields = _fields.updated(sym, _fields(sym).copy(assigned = true))
-
   def notAssigned = _fields.keys.filter(sym => !(_fields(sym).assigned))
-  def partialSyms = _fields.keys.filter(sym => _fields(sym).isPartial)
-  def filledSyms  = _fields.keys.filter(sym => _fields(sym).isFilled)
   def forcedSyms  = _fields.keys.filter(sym => _fields(sym).forced)
-  def transparentSyms  = _fields.keys.filter(sym => _fields(sym).isTransparent)
 
   def join(obj2: ObjectRep): ObjectRep = {
     assert(this.id == obj2.id)
@@ -456,10 +720,7 @@ class ObjectRep extends HeapEntry with Cloneable {
     s"""~ --------------${getClass} - $id($envId)-----------------------
         ~ | fields:  ${_fields.keys}
         ~ | not initialized:  ${notAssigned}
-        ~ | partial: ${partialSyms}
-        ~ | filled: ${filledSyms}
         ~ | lazy forced:  ${forcedSyms}
-        ~ | transparent symbols: ${transparentSyms}
         ~ | class: $tp"""
     .stripMargin('~')
 }
@@ -512,8 +773,8 @@ sealed trait Effect {
     case UseAbstractDef(sym, pos)  =>
       ctx.warning(s"`@scala.annotation.init` is recommended for abstract $sym for safe initialization", sym.pos)
       ctx.warning(s"Reference to abstract $sym which should be annotated with `@scala.annotation.init`", pos)
-    case Transparent(tree, effs)  =>
-      ctx.warning(s"Transparent effects results in initialization errors", tree.pos)
+    case Latent(tree, effs)  =>
+      ctx.warning(s"Latent effects results in initialization errors", tree.pos)
       effs.foreach(_.report)
     case Generic(msg, pos) =>
       ctx.warning(msg, pos)
@@ -527,8 +788,8 @@ case class Call(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect
 case class Force(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect    // force lazy val results in error
 case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Effect // create new instance of in-scope inner class results in error
 case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
-case class Transparent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic transparent effects (e.g. effects of closures)
-case class Generic(msg: String, pos: Position) extends Effect                     // generic problem
+case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
+case class Generic(msg: String, pos: Position) extends Effect                        // generic problem
 
 object Effect {
   type Effects = Vector[Effect]
