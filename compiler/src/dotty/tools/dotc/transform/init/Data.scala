@@ -145,7 +145,7 @@ trait ObjectValue extends LatentValue {
   def select(sym: Symbol, heap: Heap, pos: Position): Res
   def assign(sym: Symbol, valInfo: ValueInfo, heap: Heap, pos: Position): Res
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): ObjectValue
-  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res
 }
 
 class State(val state: Int) {

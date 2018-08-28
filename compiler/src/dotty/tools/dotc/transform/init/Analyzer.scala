@@ -68,9 +68,9 @@ class AtomObjectValue(val id: Int)(implicit ctx: Context) extends ObjectValue {
     Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
   }
 
-  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
-    val obj = heap(id).asInstanceOf[ObjectRep]
-    Rules.init(obj, sym, valueInfos, heap, obj, pos)
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+    val self = heap(id).asInstanceOf[ObjectRep]
+    Rules.init(self, sym, constr, valueInfos, heap, obj, pos)
   }
 
   override def hashCode = id
@@ -103,12 +103,12 @@ class UnionObjectValue(val values: Set[AtomObjectValue]) extends ObjectValue {
     }
   }
 
-  def init(sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
     val head :: tail = values.toList
     val res = head.init(sym, valueInfos, heap, obj, pos)
     tail.foldLeft(Res()) { (acc, value) =>
       val obj2 = obj.fresh
-      value.init(sym, valueInfos, heap, obj2, pos).join(acc)
+      value.init(sym, constr, valueInfos, heap, obj2, pos).join(acc)
     }
   }
 }
@@ -153,10 +153,9 @@ object Rules {
     }
   }
 
-  def init(outer: ObjectRep, sym: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position, env: Env): Res = {
-    val (tmpl: Template, envId) = outer.env.getTree(cls)
+  def init(outer: ObjectRep, sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position, env: Env): Res = {
+    val (tmpl: Template, envId) = outer.classEnv(sym.owner).getTree(cls)
     val clsEnv = env.heap(envId)
-    indexClass(cls, tmpl, clsEnv)
 
     // setup this
     val thisInfo =  new AtomObjectValue(obj.id)
@@ -707,7 +706,7 @@ class Analyzer {
       // index current class
       prefixRes.latentValue.asObject.index(cls, tree.tp, obj)
 
-      prefixRes.latentValue.asObject.init(cls, valInfos, env.heap, obj, tree.pos)
+      prefixRes.latentValue.asObject.init(cls, initsymbol, valInfos, env.heap, obj, tree.pos)
     }
     else { // type checking
       val clsRes = Rules.select(prefixRes, cls, env.heap, parent.pos)
@@ -751,7 +750,7 @@ class Analyzer {
         res.valueInfo
       }
 
-      prefixRes.latentValue.asObject.init(cls, valInfos, env.heap, obj, tree.pos)
+      prefixRes.latentValue.asObject.init(cls, init.symbol, valInfos, env.heap, obj, tree.pos)
     }
     else { // type checking
       val clsRes = Rules.select(prefixRes, cls, env.heap, parent.pos)
