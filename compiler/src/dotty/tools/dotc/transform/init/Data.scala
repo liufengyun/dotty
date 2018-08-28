@@ -37,7 +37,6 @@ object Heap {
     override def contains(sym: Symbol): Boolean = _syms.contains(sym)
 
     override def hasTree(sym: Symbol): Boolean = _symtab.contains(sym)
-
   }
 
   def createRootEnv: Env = {
@@ -102,11 +101,21 @@ class Heap extends Cloneable {
 //             values
 //=======================================
 
+/** Abstract values in analysis */
 sealed trait Value {
+  /** Apply a method or function to the provided arguments */
   def apply(params: List[Value], heap: Heap): Res
+
+  /** Select a member on a value */
   def select(sym: Symbol, heap: Heap, pos: Position): Res
+
+  /** Assign on a value */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res
+
+  /** Index an inner class with current value as the immediate outer */
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value
+
+  /** Execute the constructor of an inner class for the fresh object `obj` */
   def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res
 
   def join(other: Value): Value = (this, other) match {
@@ -132,7 +141,10 @@ sealed trait Value {
   }
 }
 
-class UnionValue(val values: Set[Value]) extends Value {
+trait SingleValue extends Value
+
+/** Union of values */
+class UnionValue(val values: List[SingleValue]) extends Value {
   def apply(params: List[Value], heap: Heap): Res = {
     values.foldLeft(Res()) { (acc, value) =>
       value.apply(sym, heap, pos).join(acc)
@@ -170,7 +182,8 @@ class UnionValue(val values: Set[Value]) extends Value {
   }
 }
 
-class OpaqueValue(val state: Int) extends Value {
+/** Values that are subject to type checking rather than analysis */
+class OpaqueValue(val state: Int) extends SingleValue {
   def isPartial = this == OpaqueValue.Partial
   def isFilled  = this == OpaqueValue.Filled
   def isFull    = this == OpaqueValue.Full
@@ -189,20 +202,29 @@ object OpaqueValue {
     new OpaqueValue(Math.max(s1.state, s2.state))
 }
 
-sealed trait TransparentValue
+/** Values that are subject to analysis rather than type checking */
+sealed trait TransparentValue extends SingleValue
 
-case class FunctionValue(apply: (Int => ValueInfo, Heap) => Res) extends TransparentValue {
+/** A function value or value of method select */
+case class FunctionValue(fun: (List[Value], Heap) => Res) extends TransparentValue {
+  def apply(params: List[Value], heap: Heap): Res = fun(params, heap)
+
   def select(sym: Symbol, heap: Heap, pos: Position): Res = {
     assert(sym.name.toString == "apply")
     Res(value = this)
   }
 
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res
+  /** not supported */
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = ???
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res = ???
 }
 
+/** An object value */
 class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
+  /** not supported, impossible to apply an object value */
+  def apply(params: List[Value], heap: Heap): Res = ???
+
   def select(sym: Symbol, heap: Heap, pos: Position): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
     Rules.select(obj, sym, pos)
@@ -217,7 +239,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
     Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
   }
 
-  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[ValueInfo], heap: Heap, obj: ObjectRep, pos: Position): Res = {
+  def init(sym: ClassSymbol, constr: Symbol, valueInfos: List[Value], heap: Heap, obj: ObjectRep, pos: Position): Res = {
     val self = heap(id).asInstanceOf[ObjectRep]
     Rules.init(self, sym, constr, valueInfos, heap, obj, pos)
   }
@@ -230,11 +252,12 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
   }
 }
 
-case class SymInfo(assigned: Boolean = true, forced: Boolean = false, value: Value)
-
 //=======================================
 //           environment
 //=======================================
+
+/** Information about fields or local variables */
+case class SymInfo(assigned: Boolean = true, forced: Boolean = false, value: Value)
 
 /** The state of closure and objects
   *
@@ -301,10 +324,7 @@ class Env(outerId: Int) extends HeapEntry {
     else outer.setAssigned(sym)
 
   def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
-  def partialSyms = _syms.keys.filter(sym => _syms(sym).isPartial)
-  def filledSyms  = _syms.keys.filter(sym => _syms(sym).isFilled)
   def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
-  def transparentSyms  = _syms.keys.filter(sym => _syms(sym).isTransparent)
 
   def join(env2: Env): Env = {
     assert(this.id == env2.id)
@@ -323,8 +343,7 @@ class Env(outerId: Int) extends HeapEntry {
         val infoRes = info.copy(
           assigned   =  true,
           forced     =  info.forced || info2.forced,
-          state      =  info.state.join(info2.state),
-          transparentValue =  info.transparentValue.join(info2.transparentValue)
+          value      =  info.value.join(info2.value)
         )
         _syms = _syms.updated(sym, infoRes)
       }
@@ -338,10 +357,7 @@ class Env(outerId: Int) extends HeapEntry {
     s"""~ --------------${getClass} - $id($outerId)-----------------------
         ~ | locals:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
-        ~ | partial: ${partialSyms}
-        ~ | filled: ${filledSyms}
-        ~ | lazy forced:  ${forcedSyms}
-        ~ | transparent symbols: ${transparentSyms}"""
+        ~ | lazy forced:  ${forcedSyms}"""
     .stripMargin('~')
 }
 
