@@ -36,7 +36,7 @@ object Heap {
   class RootEnv extends Env(-1) {
     override def contains(sym: Symbol): Boolean = _syms.contains(sym)
 
-    override def hasTree(sym: Symbol): Boolean = _symtab.contains(sym)
+    override def containsClass(sym: Symbol): Boolean = _symtab.contains(sym)
   }
 
   def createRootEnv: Env = {
@@ -407,7 +407,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
       val symInfo = obj(sym)
       if (sym.is(Lazy)) {
         if (!symInfo.forced) {
-          val res = symInfo.value(i => FullValue, obj.heap)
+          val res = symInfo.value(Nil, obj.heap)
           obj(sym) = symInfo.copy(forced = true, value = res.value)
 
           if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
@@ -475,7 +475,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
 
     if (outer.classEnv.contains(cls.owner)) {
       val outerClsEnv = heap(outer.classEnv(cls.owner).envId)
-      val (tmpl: Template, envId) = outerClsEnv.getTree(cls)
+      val (tmpl: Template, envId) = outerClsEnv.getClass(cls)
 
       // setup outer this
       val outerInfo =  new ObjectValue(outer.id)
@@ -532,14 +532,14 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   /** local symbols defined in current scope */
   protected var _syms: Map[Symbol, SymInfo] = Map()
 
-  /** definitions introduced in current scope, class methods are in table for better performance */
-  private var _symtab: mutable.Map[Symbol, Tree] = mutable.Map()
-  def addTree(sym: Symbol, tree: Tree) = _symtab(sym) = tree
-  def getTree[T <: Tree](sym: Symbol): (T, Env) =
-    if (_symtab.contains(sym)) (_symtab(sym).asInstanceOf[T], this)
-    else outer.getTree(sym)
-  def hasTree(sym: Symbol): Boolean =
-    _symtab.contains(sym) || super.hasTree(sym)
+  /** class definitions introduced in current scope */
+  private var _symtab: mutable.Map[Symbol, Template] = mutable.Map()
+  def addClass(sym: Symbol, tree: Template) = _symtab(sym) = tree
+  def getClass(sym: Symbol): (Template, Env) =
+    if (_symtab.contains(sym)) (_symtab(sym), this)
+    else outer.getClass(sym)
+  def contrainsClass(sym: Symbol): Boolean =
+    _symtab.contains(sym) || super.contrainsClass(sym)
 
   def outer: Env = heap(outerId).asInstanceOf[Env]
 
@@ -652,8 +652,8 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   }
 
   def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    if (this.hasTree(cls)) {
-      val (tmpl: Template, envId) = this.getTree(cls)
+    if (this.containsClass(cls)) {
+      val (tmpl: Template, envId) = this.getClass(cls)
 
       // setup this
       val innerClsEnv = heap(obj.classEnv(cls).envId)

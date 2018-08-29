@@ -141,8 +141,13 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       // enhancement possible to check if there are actual children
       // and whether children are possible in other modules.
 
+    // index fields
+    cls.typeRef.fields.foreach { field =>
+      obj.add(field.symbol, SymInfo(assigned = false, value = FullValue))
+    }
+
     // for recursive usage
-    root.addTree(cls, tmpl)
+    root.addClass(cls, tmpl)
     indexOuter(cls, root)
 
     // index object
