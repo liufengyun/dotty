@@ -109,7 +109,7 @@ sealed trait Scope {
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res
 
   /** Index an inner class with current value as the immediate outer */
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep]
 
   /** Execute the constructor of an inner class for the fresh object `obj` */
   def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res
@@ -199,12 +199,11 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
     }
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = {
-    val head :: tail = values.toList
-    val value = head.index(cls, tp, v)
-    tail.foldLeft(value) { (acc, value) =>
-      val obj2 = obj.fresh
-      value.index(cls, tp, obj2).join(acc)
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
+    var used = false
+    values.flatMap { value =>
+      val obj2 = if (used) obj.fresh else { used = true; obj }
+      value.index(cls, tp, obj2)
     }
   }
 
@@ -228,7 +227,7 @@ sealed class OpaqueValue extends SingleValue {
     Res()
   }
 
-  def index(cls: ClassSymbol, tp: Type, value: Value): Value = value
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = Set(obj)
 
   def <(that: OpaqueValue): Boolean = (this, that) match {
     case (FullValue, _) => false
@@ -365,7 +364,7 @@ case class FunctionValue(fun: Int => Value, Heap) => Res) extends TransparentVal
 
   /** not supported */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = ???
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = ???
   def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = ???
 }
 
@@ -468,7 +467,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
     }
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = {
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
     Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
   }
 
@@ -545,8 +544,8 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     env
   }
 
-  def newObject(heap: Heap = this.heap, open: Boolean = true): ObjectRep = {
-    val obj = new ObjectRep
+  def newObject(tp: Type, heap: Heap = this.heap, open: Boolean = true): ObjectRep = {
+    val obj = new ObjectRep(tp, open)
     heap.add(obj)
     obj
   }
@@ -638,7 +637,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     }
     else Res()
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = {
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
     Indexing.indexLocalClass(cls, tp, obj, this)
   }
 

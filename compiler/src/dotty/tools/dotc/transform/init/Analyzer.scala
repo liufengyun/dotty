@@ -98,22 +98,7 @@ object Indexing {
     case _ =>
   }
 
-  def indexClass(cls: ClassSymbol, tp: Type, env: Env, obj: ObjectRep)(implicit ctx: Context): ObjectValue = {
-    def toPrefix(tp: Type): TypeRef = tp match {
-      case AppliedType(tycon, _) => toPrefix(tycon.dealias)
-      case tp: TypeRef => tp.prefix
-    }
-
-    val prefix = toPrefix(tp)
-    if (prefix == NoPrefix) env.index(cls, tp, ob)
-    else {
-      val prefixRes = checkRef(prefix, env, parent.pos)
-      if (prefixRes.hasErrors) prefixRes
-      else prefixRes.value.index(cls, tp, obj)
-    }
-  }
-
-  def indexInnerClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): ObjectValue = {
+  def indexInnerClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = {
     if (outer.classInfos.contains(cls)) {
       val (tmpl, envId) = outer.classInfos(cls)
       val envOuter = outer.heap(envId)
@@ -139,10 +124,10 @@ object Indexing {
       innerClsEnv.add(cls, SymInfo(value = self))
     }
 
-    new ObjectValue(inner.id)
+    Set(inner)
   }
 
-  def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): ObjectValue = {
+  def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): Set[ObjectRep] = {
     if (env.classInfos.contains(cls)) {
       val tmpl = env.classInfos(cls)
 
@@ -154,7 +139,7 @@ object Indexing {
       innerEnv.add(cls, SymInfo(value = self))
     }
 
-    new ObjectValue(inner.id)
+    Set(inner)
   }
 }
 
@@ -359,12 +344,7 @@ class Analyzer {
 
     if (effs.nonEmpty) return Res(effs)
 
-    val obj = env.newObject
-
-    // index fields
-    tree.tpe.fields.foreach { field =>
-      obj.add(field.symbol, SymInfo(assigned = false, value = FullValue))
-    }
+    val obj = env.newObject(tree.tpe, open = false)
 
     val scope: Scope =
       if (tref.prefix == NoPrefix) env
@@ -374,14 +354,31 @@ class Analyzer {
         prefixRes.value
       }
 
-    // index class environments
-    val atom = scope.index(cls, tree.tp, obj)
-    val value = cls.baseClasses.tail.foldLeft(atom) { (parent, acc) =>
-      val baseType = tree.tpe.baseType(parent)
-      indexClass(parent, baseType, env, obj).join(acc)
+    def toPrefix(tp: Type): TypeRef = tp match {
+      case AppliedType(tycon, _) => toPrefix(tycon.dealias)
+      case tp: TypeRef => tp.prefix
     }
 
-    scope.init(cls, init.symbol, values, args.map(_.pos), env.heap, value, tree.pos)
+    // index class environments
+    val objs = cls.baseClasses.flatMap { parent =>
+      val baseType = tree.tpe.baseType(parent)
+      val prefix = toPrefix(baseType)
+      val scope =
+        if (prefix == NoPrefix) env
+        else {
+          val prefixRes = checkRef(prefix, env, parent.pos)
+          if (prefixRes.hasErrors) prefixRes
+          else prefixRes.value
+        }
+
+      scope.index(cls, tp, obj)
+    }
+
+    val objValue =
+      if (objs.size == 1) new ObjectValue(objs.head.id)
+      else new UnionValue(objs.map(new ObjectValue(_.id)))
+
+    scope.init(cls, init.symbol, values, args.map(_.pos), env.heap, objValue, tree.pos)
   }
 
   def checkInit(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)(implicit ctx: Context): Res = {
