@@ -53,7 +53,6 @@ object Analyzer {
     sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)
 }
 
-
 object Indexing {
   /** Index local definitions */
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
@@ -118,7 +117,21 @@ object Indexing {
       indexStats(tmpl.body, innerEnv)
       inner.add(ClassEnv(innerEnv.id, tp))
     }
-    else new AtomObjectValue(obj.id)
+
+    new ObjectValue(inner.id)
+  }
+
+  def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): ObjectValue = {
+    if (env.contains(cls)) {
+      val (tmpl: Template, _) = env.getTree(cls)
+
+      // don't go recursively for parents as indexing is based on linearization
+      val innerEnv = env.fresh()
+      indexStats(tmpl.body, innerEnv)
+      inner.add(ClassEnv(innerEnv.id, tp))
+    }
+
+    new ObjectValue(inner.id)
   }
 
   def initObject(cls: ClassSymbol, tmpl: Template, obj: ObjectRep)(implicit ctx: Context): Unit = {
@@ -129,25 +142,26 @@ object Indexing {
     // primary constructor fields are init early
     tmpl.constr.vparamss.flatten.foreach { (param: ValDef) =>
       val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-      obj(sym) = SymInfo(assigned = true, state = Analyzer.typeState(sym.info))
+      obj(sym) = SymInfo(assigned = true, value = Analyzer.typeState(sym.info))
     }
   }
 
   def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
-    def recur(cls: Symbol, maxState: State): Unit = if (cls.owner.exists) {
-      val outerState = symbolState(cls)
+    def recur(cls: Symbol, maxValue: OpaqueValue): Unit = if (cls.owner.exists) {
+      val outerValue = symbolState(cls)
       val enclosingCls = cls.owner.enclosingClass
 
-      if (!cls.owner.isClass || maxState.isFull) {
-        env.add(enclosingCls, SymInfo(state = State.Full))
-        recur(enclosingCls, State.Full)
+      if (!cls.owner.isClass || maxState == FullValue) {
+        env.add(enclosingCls, SymInfo(value = FullValue))
+        recur(enclosingCls, FullValue)
       }
       else {
-        env.add(enclosingCls, SymInfo(state = State.max(outerState, maxState)))
-        recur(enclosingCls, State.max(outerState, maxState))
+        val meet = outerValue.join(maxValue)
+        env.add(enclosingCls, SymInfo(value = meet)
+        recur(enclosingCls, meet)
       }
     }
-    recur(cls, State.Partial)
+    recur(cls, PartialValue)
   }
 }
 
@@ -244,7 +258,7 @@ class Analyzer {
       if (cls.is(Package)) Res() // Dotty represents package path by ThisType
       else {
         val symInfo = env(cls)
-        Res(latentValue = symInfo.latentValue, state = symInfo.state)
+        Res(value = symInfo.value)
       }
     case tp @ SuperType(thistpe, supertpe) =>
       // TODO : handle `supertpe`
@@ -357,9 +371,6 @@ class Analyzer {
     val cls = tref.classSymbol
     val args = argss.flatten
 
-    // TODO: prefix can be NoPrefix
-    val prefixRes = checkRef(tref.prefix, env, parent.pos)
-
     // setup constructor params
     var effs = Vector.empty[Effect]
     val values = args.map { arg =>
@@ -372,22 +383,28 @@ class Analyzer {
 
     val obj = env.newObject
 
+    val scope: Scope =
+      if (tref.prefix == NoPrefix) env
+      else {
+        val prefixRes = checkRef(tref.prefix, env, parent.pos)
+        if (prefixRes.hasErrors) return prefixRes
+        prefixRes.value
+      }
+
     // index class environments
-    val atom = prefixRes.index(cls, tree.tp, obj)
+    val atom = scope.index(cls, tree.tp, obj)
     val value = cls.baseClasses.tail.foldLeft(atom) { (parent, acc) =>
       val baseType = tree.tpe.baseType(parent)
       indexClass(parent, baseType, env, obj).join(acc)
     }
 
-    prefixRes.init(cls, initsymbol, values, args.map(_.pos), env.heap, value, tree.pos)
+    scope.init(cls, init.symbol, values, args.map(_.pos), env.heap, value, tree.pos)
   }
 
   def checkInit(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)implicit ctx: Context): Res = {
     val cls = tref.classSymbol
     val args = argss.flatten
 
-    // TODO: prefix can be NoPrefix
-    val prefixRes = checkRef(tref.prefix, env, parent.pos)
     // setup constructor params
     var effs = Vector.empty[Effect]
     val values = args.map { arg =>
@@ -398,7 +415,16 @@ class Analyzer {
 
     if (effs.nonEmpty) return Res(effs)
 
-    prefixRes.init(cls, init.symbol, values, args.map(_.pos), env.heap, obj, tree.pos)
+    // TODO: prefix can be NoPrefix
+    val scope: Scope =
+      if (tref.prefix == NoPrefix) env
+      else {
+        val prefixRes = checkRef(tref.prefix, env, parent.pos)
+        if (prefixRes.hasErrors) return prefixRes
+        prefixRes.value
+      }
+
+    scope.init(cls, init.symbol, values, args.map(_.pos), env.heap, obj, tree.pos)
   }
 
   object NewEx {
