@@ -33,12 +33,12 @@ object Analyzer {
 
   def isPrimaryConstructorFields(sym: Symbol)(implicit ctx: Context) = sym.is(ParamAccessor)
 
-  def typeState(tp: Type)(implicit ctx: Context) =
+  def typeValue(tp: Type)(implicit ctx: Context) =
     if (isPartial(tp)) State.Partial
     else if (isFilled(tp)) State.Filled
     else State.Full
 
-  def symbolState(sym: Symbol)(implicit ctx: Context) =
+  def symbolValue(sym: Symbol)(implicit ctx: Context) =
     if (isPartial(sym)) State.Partial
     else if (isFilled(sym)) State.Filled
     else State.Full
@@ -84,11 +84,11 @@ object Indexing {
     val enclosingCls = cls.owner
     if (outer.classEnv.contains(enclosingCls)) {
       val ClassEnv(envId, _) = outer.classEnv(enclosingCls)
-      val env = outer.heap(envId)
-      val (tmpl: Template, _) = env.getTree(cls)
+      val envOuter = outer.heap(envId)
+      val (tmpl: Template, _) = envOuter.getTree(cls)
 
       // don't go recursively for parents as indexing is based on linearization
-      val innerEnv = env.fresh()
+      val innerEnv = envOuter.fresh()
       indexStats(tmpl.body, innerEnv)
       inner.add(ClassEnv(innerEnv.id, tp))
     }
@@ -97,12 +97,11 @@ object Indexing {
   }
 
   def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): ObjectValue = {
-    if (env.contains(cls)) {
+    if (env.hasTree(cls)) {
       val (tmpl: Template, envId) = env.getTree(cls)
-      val envOuter = env.heap(envId).asInstanceOf[Env]
 
       // don't go recursively for parents as indexing is based on linearization
-      val innerEnv = envOuter.fresh()
+      val innerEnv = env.fresh()
       indexStats(tmpl.body, innerEnv)
       inner.add(ClassEnv(innerEnv.id, tp))
     }
@@ -147,35 +146,18 @@ class Analyzer {
     // check params
     var effs = Vector.empty[Effect]
 
-    if (funRes.isLatent) {
-      val valInfos = args.map { arg =>
-        val res = apply(arg, env)
-        effs = effs ++ res.effects
-        res.valueInfo
-      }
-
-      if (effs.size > 0) return Res(effects = effs)
-
-      indentedDebug(s">>> calling $funSym")
-      val res = funRes.latentValue.asMethod(valInfos, env.heap)
-      if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
-      res
+    val values = args.map { arg =>
+      val res = apply(arg, env)
+      effs = effs ++ res.effects
+      res.value
     }
-    else {
-      val valInfos = args.map { arg =>
-        val res = apply(arg, env)
-        effs = effs ++ res.effects
 
-        if (res.isLatent)
-          res.state = Rules.latentState(res.latentValue, env.heap, arg.pos)
+    if (effs.size > 0) return Res(effects = effs)
 
-        res.valueInfo
-      }
-
-      if (effs.size > 0) return Res(effects = effs)
-
-      checkParams(funSym, valInfos, paramInfos, env, args.map(_.pos))
-    }
+    indentedDebug(s">>> calling $funSym")
+    val res = funRes.value(values, env.heap)
+    if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
+    res
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
@@ -236,11 +218,11 @@ class Analyzer {
     // take `_` as uninitialized, otherwise it's initialized
     if (!tpd.isWildcardArg(vdef.rhs)) sym.termRef match {
       case tp @ TermRef(NoPrefix, _) =>
-        env.assign(tp.symbol, rhsRes.valueInfo, vdef.rhs.pos)
+        env.assign(tp.symbol, rhsRes.value, vdef.rhs.pos)
       case tp @ TermRef(prefix, _) =>
         val prefixRes = checkRef(prefix, env, vdef.rhs.pos)
         assert(!prefixRes.hasErrors)
-        prefixRes.latentValue.asObject.assign(sym, rhsRes.valueInfo, env.heap, vdef.pos)
+        prefixRes.latentValue.asObject.assign(sym, rhsRes.value, env.heap, vdef.pos)
     }
 
     Res(effects = rhsRes.effects)
@@ -280,15 +262,15 @@ class Analyzer {
       case ident @ Ident(_) =>
         ident.tpe match {
           case tp @ TermRef(NoPrefix, _) =>
-            env.assign(tp.symbol, rhsRes.valueInfo, rhs.pos)
+            env.assign(tp.symbol, rhsRes.value, rhs.pos)
           case tp @ TermRef(prefix, _) =>
             val prefixRes = checkRef(prefix, env, rhs.pos)
             if (prefixRes.hasErrors) prefixRes
-            else prefixRes.value.assign(tp.symbol, rhsRes.valueInfo, env.heap, rhs.pos)
+            else prefixRes.value.assign(tp.symbol, rhsRes.value, env.heap, rhs.pos)
         }
       case sel @ Select(qual, _) =>
         val prefixRes = apply(qual, env)
-        prefixRes.value.assign(sel.symbol, rhsRes.valueInfo, env.heap, rhs.pos)
+        prefixRes.value.assign(sel.symbol, rhsRes.value, env.heap, rhs.pos)
     }
   }
 

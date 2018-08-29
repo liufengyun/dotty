@@ -150,7 +150,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     // init object
     val constr = tmpl.constr
-    val values = constr.vparamss.flatten.map { param => Analyzer.typeState(param.symbol) }
+    val values = constr.vparamss.flatten.map { param => Analyzer.typeValue(param.symbol) }
     val res = env.init(cls, tmpl.constr.symbol, values, Nil, obj, NoPosition)
 
     res.effects.foreach(_.report)
@@ -164,10 +164,10 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
   def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
     def recur(cls: Symbol, maxValue: OpaqueValue): Unit = if (cls.owner.exists) {
-      val outerValue = symbolState(cls)
+      val outerValue = symbolValue(cls)
       val enclosingCls = cls.owner.enclosingClass
 
-      if (!cls.owner.isClass || maxState == FullValue) {
+      if (!cls.owner.isClass || maxValue == FullValue) {
         env.add(enclosingCls, SymInfo(value = FullValue))
         recur(enclosingCls, FullValue)
       }
