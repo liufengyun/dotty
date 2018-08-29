@@ -127,15 +127,29 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       }
     }
 
+    checkInit(cls, tree)
+
+    tree
+  }
+
+  def checkInit(cls: ClassSymbol, tmpl: tpd.Template)(implicit ctx: Context) = {
     val analyzer = new Analyzer
 
     // current class env needs special setup
     val root = Heap.createRootEnv
+    val obj = root.newObject
 
-    // create a custom ObjectInfo for `this`, which implements special rules about member selection
-    val obj = setupConstructorEnv(root, cls, tree, analyzer)
+    // for recursive usage
+    root.addTree(cls, tmpl)
+    indexOuter(cls, root)
 
-    val res = analyzer.checkTemplate(tree, root, obj)
+    // index object
+    root.index(cls, cls.typeRef, obj)
+
+    // init object
+    val constr = tmpl.constr
+    val values = constr.vparamss.flatten.map { param => Analyzer.typeState(param.symbol) }
+    val res = env.init(cls, tmpl.constr.symbol, values, Nil, obj, NoPosition)
 
     res.effects.foreach(_.report)
     obj.notAssigned.foreach { name =>
@@ -144,20 +158,23 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     }
 
     debug(obj.toString)
-
-    tree
   }
 
-  def setupConstructorEnv(env: Env, cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
-    val obj = env.newObject
+  def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
+    def recur(cls: Symbol, maxValue: OpaqueValue): Unit = if (cls.owner.exists) {
+      val outerValue = symbolState(cls)
+      val enclosingCls = cls.owner.enclosingClass
 
-    // for recursive usage
-    env.addTree(cls, tmpl)
-
-    Indexing.indexTemplate(cls, cls.typeRef, tmpl, env, obj)
-    Indexing.initObject(cls, tmpl, obj)
-    Indexing.indexOuter(cls, env)
-
-    obj
+      if (!cls.owner.isClass || maxState == FullValue) {
+        env.add(enclosingCls, SymInfo(value = FullValue))
+        recur(enclosingCls, FullValue)
+      }
+      else {
+        val meet = outerValue.join(maxValue)
+        env.add(enclosingCls, SymInfo(value = meet)
+        recur(enclosingCls, meet)
+      }
+    }
+    recur(cls, PartialValue)
   }
 }

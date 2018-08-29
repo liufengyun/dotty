@@ -473,12 +473,12 @@ class ObjectValue(val id: Int, val open: Boolean = true)(implicit ctx: Context) 
     Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
   }
 
-  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
+  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
     val heap = obj.heap
     val outer = heap(id).asInstanceOf[ObjectRep]
 
-    if (outer.classEnv.contains(sym.owner)) {
-      val outerClsEnv = heap(outer.classEnv(sym.owner).envId)
+    if (outer.classEnv.contains(cls.owner)) {
+      val outerClsEnv = heap(outer.classEnv(cls.owner).envId)
       val (tmpl: Template, envId) = outerClsEnv.getTree(cls)
 
       // setup outer this
@@ -486,13 +486,16 @@ class ObjectValue(val id: Int, val open: Boolean = true)(implicit ctx: Context) 
       outerClsEnv.add(sym.owner, SymInfo(value = outerInfo))
 
       // setup this
-      val innerClsEnv = heap(obj.classEnv(sym).envId)
+      val innerClsEnv = heap(obj.classEnv(cls).envId)
       val thisInfo =  new ObjectValue(obj.id)
       innerClsEnv.add(cls, SymInfo(value = thisInfo))
 
       // setup constructor params
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-        innerClsEnv.add(param.symbol, SymInfo(assigned = true, value = values(index)))
+        val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
+        val info = SymInfo(assigned = true, value = values(index))
+        if (sym.exists) obj.add(sym, info)
+        innerClsEnv.add(param.symbol, info)
       }
 
       checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
@@ -652,18 +655,21 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     Indexing.indexLocalClass(cls, tp, obj, this)
   }
 
-  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    if (this.contains(sym)) {
+  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
+    if (this.contains(cls)) {
       val (tmpl: Template, envId) = this.getTree(cls)
 
       // setup this
-      val innerClsEnv = heap(obj.classEnv(sym).envId)
+      val innerClsEnv = heap(obj.classEnv(cls).envId)
       val thisInfo =  new ObjectValue(obj.id)
       innerClsEnv.add(cls, SymInfo(value = thisInfo))
 
       // setup constructor params
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-        innerClsEnv.add(param.symbol, SymInfo(assigned = true, value = values(index)))
+        val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
+        val info = SymInfo(assigned = true, value = values(index))
+        if (sym.exists) obj.add(sym, info)
+        innerClsEnv.add(param.symbol, info)
       }
 
       checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)

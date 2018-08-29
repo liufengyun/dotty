@@ -65,43 +65,18 @@ object Indexing {
     case _ =>
   }
 
-  def indexTemplate(cls: ClassSymbol, tp: Type, tmpl: Template, env: Env, obj: ObjectRep): ObjectValue = {
-    // index current class environment
-    val innerEnv = env.fresh()
-    indexStats(tmpl.body, innerEnv)
-    obj.add(ClassEnv(innerEnv.id, tp))
-
-    // index parent class environments
-    val atom = new AtomObjectValue(obj.id)
-    cls.baseClasses.tail.foldLeft(atom) { (parent, acc) =>
-      val baseType = tp.baseType(parent)
-      indexClass(parent, baseType, env, obj).join(acc)
-    }
-  }
-
   def indexClass(cls: ClassSymbol, tp: Type, env: Env, obj: ObjectRep)(implicit ctx: Context): ObjectValue = {
     def toPrefix(tp: Type): TypeRef = tp match {
       case AppliedType(tycon, _) => toPrefix(tycon.dealias)
       case tp: TypeRef => tp.prefix
     }
 
-    def default = new AtomObjectValue(obj.id)
-
     val prefix = toPrefix(tp)
-    if (prefix == NoPrefix) {
-      // must exist in scope
-      val (tmpl: Template, envId) = env.getTree(cls)
-      val envOuter = env.heap(envId).asInstanceOf[Env]
-
-      val innerEnv = envOuter.fresh()
-      indexStats(tmpl.body, innerEnv)
-      obj.add(ClassEnv(innerEnv.id, tp))
-    }
+    if (prefix == NoPrefix) env.index(cls, tp, ob)
     else {
       val prefixRes = checkRef(prefix, env, parent.pos)
-      if (prefixRes.isLatent)
-        prefixRes.latentValue.asObject.index(cls, tp, obj)
-      else default
+      if (prefixRes.hasErrors) prefixRes
+      else prefixRes.value.index(cls, tp, obj)
     }
   }
 
@@ -123,10 +98,11 @@ object Indexing {
 
   def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): ObjectValue = {
     if (env.contains(cls)) {
-      val (tmpl: Template, _) = env.getTree(cls)
+      val (tmpl: Template, envId) = env.getTree(cls)
+      val envOuter = env.heap(envId).asInstanceOf[Env]
 
       // don't go recursively for parents as indexing is based on linearization
-      val innerEnv = env.fresh()
+      val innerEnv = envOuter.fresh()
       indexStats(tmpl.body, innerEnv)
       inner.add(ClassEnv(innerEnv.id, tp))
     }
@@ -144,24 +120,6 @@ object Indexing {
       val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
       obj(sym) = SymInfo(assigned = true, value = Analyzer.typeState(sym.info))
     }
-  }
-
-  def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
-    def recur(cls: Symbol, maxValue: OpaqueValue): Unit = if (cls.owner.exists) {
-      val outerValue = symbolState(cls)
-      val enclosingCls = cls.owner.enclosingClass
-
-      if (!cls.owner.isClass || maxState == FullValue) {
-        env.add(enclosingCls, SymInfo(value = FullValue))
-        recur(enclosingCls, FullValue)
-      }
-      else {
-        val meet = outerValue.join(maxValue)
-        env.add(enclosingCls, SymInfo(value = meet)
-        recur(enclosingCls, meet)
-      }
-    }
-    recur(cls, PartialValue)
   }
 }
 
@@ -337,7 +295,8 @@ class Analyzer {
             env.assign(tp.symbol, rhsRes.valueInfo, rhs.pos)
           case tp @ TermRef(prefix, _) =>
             val prefixRes = checkRef(prefix, env, rhs.pos)
-            prefixRes.value.assign(tp.symbol, rhsRes.valueInfo, env.heap, rhs.pos)
+            if (prefixRes.hasErrors) prefixRes
+            else prefixRes.value.assign(tp.symbol, rhsRes.valueInfo, env.heap, rhs.pos)
         }
       case sel @ Select(qual, _) =>
         val prefixRes = apply(qual, env)
@@ -401,7 +360,7 @@ class Analyzer {
     scope.init(cls, init.symbol, values, args.map(_.pos), env.heap, value, tree.pos)
   }
 
-  def checkInit(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)implicit ctx: Context): Res = {
+  def checkInit(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env, obj: ObjectRep)(implicit ctx: Context): Res = {
     val cls = tref.classSymbol
     val args = argss.flatten
 
@@ -415,7 +374,6 @@ class Analyzer {
 
     if (effs.nonEmpty) return Res(effs)
 
-    // TODO: prefix can be NoPrefix
     val scope: Scope =
       if (tref.prefix == NoPrefix) env
       else {
