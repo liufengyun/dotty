@@ -54,43 +54,47 @@ object Analyzer {
 }
 
 object Indexing {
+  def methodValue(ddef: DefDef, env: Env)(implicit ctx: Context): FunctionValue =
+    FunctionValue { (args, heap) =>
+      if (isChecking(ddef.symbol)) {
+        // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
+        debug(s"recursive call of ${ddef.symbol} found")
+        Res()
+      }
+      else {
+        val env2 = env.fresh(heap)
+        ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+          env2.add(param.symbol, SymInfo(assigned = true, value = args(index)))
+        }
+
+        checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
+      }
+    }
+
+  def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): FunctionValue =
+    FunctionValue { (args, heap) =>
+      if (isChecking(ddef.symbol)) {
+        // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
+        debug(s"recursive call of ${ddef.symbol} found")
+        Res()
+      }
+      else {
+        val env2 = heap(env.id)
+        checking(vdef.symbol) { apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
+      }
+    }
+
   /** Index local definitions */
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef =>
-      val value = FunctionValue { (args, heap) =>
-        if (isChecking(ddef.symbol)) {
-          // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
-          debug(s"recursive call of ${ddef.symbol} found")
-          Res()
-        }
-        else {
-          val env2 = env.fresh(heap)
-          ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-            env2.add(param.symbol, SymInfo(assigned = true, value = args(index)))
-          }
-
-          checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
-        }
-      }
-
-      env.add(ddef.symbol, SymInfo(value = value))
+      env.add(ddef.symbol, SymInfo(value = methodValue(ddef, env)))
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      val value = FunctionValue { (args, heap) =>
-        if (isChecking(ddef.symbol)) {
-          // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
-          debug(s"recursive call of ${ddef.symbol} found")
-          Res()
-        }
-        else {
-          val env2 = heap(env.id)
-          checking(vdef.symbol) { apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
-        }
-      }
-
-      env.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = value))
+      env.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = lazyValue(vdef, env)))
+    case vdef: ValDef =>
+      env.add(vdef.symbol, SymInfo(assigned = false, value = FullValue))
     case tdef: TypeDef if tdef.isClassDef  =>
       // class has to be handled differently because of inheritance
-      env.addClass(tdef.symbol, tdef.rhs.asInstanceOf[Template])
+      env.add(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template])
     case _ =>
   }
 
@@ -110,29 +114,44 @@ object Indexing {
   }
 
   def indexInnerClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): ObjectValue = {
-    val enclosingCls = cls.owner
-    if (outer.classEnv.contains(enclosingCls)) {
-      val ClassEnv(envId, _) = outer.classEnv(enclosingCls)
+    if (outer.classInfos.contains(cls)) {
+      val (tmpl, envId) = outer.classInfos(cls)
       val envOuter = outer.heap(envId)
-      val (tmpl: Template, _) = envOuter.getClass(cls)
+      val innerClsEnv = envOuter.fresh()
 
       // don't go recursively for parents as indexing is based on linearization
-      val innerEnv = envOuter.fresh()
-      indexStats(tmpl.body, innerEnv)
-      inner.add(ClassEnv(innerEnv.id, tp))
+      // a trick: use `ObjectRep` for name resolution, but `innerClsEnv` for method execution
+      tmpl.body.foreach {
+        case ddef: DefDef =>
+          inner.add(ddef.symbol, SymInfo(value = methodValue(ddef, innerClsEnv)))
+        case vdef: ValDef if vdef.symbol.is(Lazy)  =>
+          inner.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = lazyValue(vdef, innerClsEnv)))
+        case vdef: ValDef =>
+          inner.add(vdef.symbol, SymInfo(assigned = false, value = FullValue))
+        case tdef: TypeDef if tdef.isClassDef  =>
+          // class has to be handled differently because of inheritance
+          inner.add(tdef.symbol, tdef.rhs.asInstanceOf[Template] -> innerClsEnv.id)
+        case _ =>
+      }
+
+      // setup this
+      val self =  new ObjectValue(obj.id)
+      innerClsEnv.add(cls, SymInfo(value = self))
     }
 
     new ObjectValue(inner.id)
   }
 
   def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): ObjectValue = {
-    if (env.containsClass(cls)) {
-      val (tmpl: Template, envId) = env.getClass(cls)
+    if (env.classInfos.contains(cls)) {
+      val tmpl = env.classInfos(cls)
 
       // don't go recursively for parents as indexing is based on linearization
       val innerEnv = env.fresh()
       indexStats(tmpl.body, innerEnv)
-      inner.add(ClassEnv(innerEnv.id, tp))
+
+      val self =  new ObjectValue(obj.id)
+      innerEnv.add(cls, SymInfo(value = self))
     }
 
     new ObjectValue(inner.id)

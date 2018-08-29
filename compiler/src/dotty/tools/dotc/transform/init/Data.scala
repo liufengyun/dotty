@@ -201,7 +201,7 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
 
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = {
     val head :: tail = values.toList
-    val value = head.index(cls, tp, obj)
+    val value = head.index(cls, tp, v)
     tail.foldLeft(value) { (acc, value) =>
       val obj2 = obj.fresh
       value.index(cls, tp, obj2).join(acc)
@@ -228,7 +228,7 @@ sealed class OpaqueValue extends SingleValue {
     Res()
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Value = obj
+  def index(cls: ClassSymbol, tp: Type, value: Value): Value = value
 
   def <(that: OpaqueValue): Boolean = (this, that) match {
     case (FullValue, _) => false
@@ -402,8 +402,11 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
   }
 
   def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+  }
+
+  private def select(sym: Symbol, heap: Heap, pos: Position, env: Env): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
-    if (obj.contains(sym)) {
+    if (env.contains(sym)) {
       val symInfo = obj(sym)
       if (sym.is(Lazy)) {
         if (!symInfo.forced) {
@@ -477,15 +480,6 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
       val outerClsEnv = heap(outer.classEnv(cls.owner).envId)
       val (tmpl: Template, envId) = outerClsEnv.getClass(cls)
 
-      // setup outer this
-      val outerInfo =  new ObjectValue(outer.id)
-      outerClsEnv.add(sym.owner, SymInfo(value = outerInfo))
-
-      // setup this
-      val innerClsEnv = heap(obj.classEnv(cls).envId)
-      val thisInfo =  new ObjectValue(obj.id)
-      innerClsEnv.add(cls, SymInfo(value = thisInfo))
-
       // setup constructor params
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
         val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
@@ -532,14 +526,11 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   /** local symbols defined in current scope */
   protected var _syms: Map[Symbol, SymInfo] = Map()
 
-  /** class definitions introduced in current scope */
-  private var _symtab: mutable.Map[Symbol, Template] = mutable.Map()
-  def addClass(sym: Symbol, tree: Template) = _symtab(sym) = tree
-  def getClass(sym: Symbol): (Template, Env) =
-    if (_symtab.contains(sym)) (_symtab(sym), this)
-    else outer.getClass(sym)
-  def contrainsClass(sym: Symbol): Boolean =
-    _symtab.contains(sym) || super.contrainsClass(sym)
+  /** local class definitions */
+  private var _classInfos: Map[ClassSymbol, Template] = List()
+  def add(cls: ClassSymbol, info: Template) =
+    _classEnv(cls) = info
+  def classInfos: Map[ClassSymbol, Template] = _classInfos
 
   def outer: Env = heap(outerId).asInstanceOf[Env]
 
@@ -685,74 +676,58 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     .stripMargin('~')
 }
 
-/** ClassEnv stores the outer information for class members with a particular prefix (outer)
- *
- *  Class environment are immutable, thus they don't need to be in the heap.
+/** A container holds all information about fields of an object and outers of nested classes
  */
-case class ClassEnv(envId: Int, val tp: Type) {
-  def classSymbol(implicit ctx: Context): ClassSymbol = tp.classSymbol.asClass
-}
-
-/** A container holds all information about fields of an object and outers of object's classes
- */
-class ObjectRep(val open: Boolean = true) extends HeapEntry with Cloneable {
+class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with Cloneable {
   override def clone: ObjectRep = super.clone.asInstanceOf[ObjectRep]
 
   def fresh: ObjectRep = {
-    val obj = new ObjectRep
-    obj._fields = this._fields
-    obj._classEnvs = this._classEnvs
+    val obj = new ObjectRep(tp, open)
+    obj._syms = this._syms
+    obj._classInfos = this._classInfos
     heap.add(obj)
     obj
   }
 
-  // in linearization order, last is current class
-  private var _classEnvs: List[(Symbol, ClassEnv)] = List()
-  def add(sym: Symbol, classEnv: ClassEnv) =
-    _classEnvs = (sym, classEnv) :: _classEnvs
+  /** inner class definitions */
+  private var _classInfos: Map[ClassSymbol, (Template, Int)] = List()
+  def add(cls: ClassSymbol, info: (Template, Int)) = _classInfos(cls) = info
+  def classInfos: Map[ClassSymbol, (Template, Int)] = _classInfos
 
-  def classEnv: Map[Symbol, ClassEnv] = Map(_classEnvs)
-
-  def tp: Type = _classEnvs.last.tp
-
-  /** Fields of the object, in most cases only field name matters.
-   *
-   *  Usage of symbols make it possible to support shadowed fields.
-   *  Name resolution done elsewhere.
-   */
-  private var _fields: Map[Symbol, SymInfo] = Map()
+  /** methods and fields of the object */
+  private var _syms: Map[Symbol, SymInfo] = Map()
 
   def apply(sym: Symbol): SymInfo =
-    _fields(sym)
+    _syms(sym)
 
   def add(sym: Symbol, info: SymInfo) =
-    _fields = _fields.updated(sym, info)
+    _syms = _syms.updated(sym, info)
 
   // object environment should not resolve outer
   def update(sym: Symbol, info: SymInfo): Unit = {
-    assert(_fields.contains(sym))
-    _fields = _fields.updated(sym, info)
+    assert(_syms.contains(sym))
+    _syms = _syms.updated(sym, info)
   }
 
   def contains(sym: Symbol): Boolean =
-    _fields.contains(sym)
+    _syms.contains(sym)
 
-  def notAssigned = _fields.keys.filter(sym => !(_fields(sym).assigned))
-  def forcedSyms  = _fields.keys.filter(sym => _fields(sym).forced)
+  def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
+  def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
 
   def join(obj2: ObjectRep): ObjectRep = {
     assert(this.id == obj2.id)
 
-    _fields.foreach { case (sym: Symbol, info: SymInfo) =>
+    _syms.foreach { case (sym: Symbol, info: SymInfo) =>
       assert(obj2.contains(sym))
-      val info2 = obj2._fields(sym)
+      val info2 = obj2._syms(sym)
       // path-insensitive approximation:
       // 1. if a variable is assigned in one branch, but not in the other branch, we
       //    treat the variable as not assigned.
       // 2. a lazy variable is force if it's forced in either branch
       // 3. a variable gets the lowest possible state
       if (!info.assigned || !info2.assigned)
-        _fields = _fields.updated(sym, info.copy(assigned = false, transparentValue = NoTransparent))
+        _syms = _syms.updated(sym, info.copy(assigned = false, transparentValue = NoTransparent))
       else {
         val infoRes = info.copy(
           assigned   =  true,
@@ -760,7 +735,7 @@ class ObjectRep(val open: Boolean = true) extends HeapEntry with Cloneable {
           value      =  info.value.join(info2.value)
         )
 
-        _fields = _fields.updated(sym, infoRes)
+        _syms = _syms.updated(sym, infoRes)
       }
     }
 
@@ -769,7 +744,7 @@ class ObjectRep(val open: Boolean = true) extends HeapEntry with Cloneable {
 
   override def toString: String =
     s"""~ --------------${getClass} - $id($envId)-----------------------
-        ~ | fields:  ${_fields.keys}
+        ~ | fields:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
         ~ | lazy forced:  ${forcedSyms}
         ~ | class: $tp"""
