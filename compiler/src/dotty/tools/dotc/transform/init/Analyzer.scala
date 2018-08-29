@@ -109,18 +109,6 @@ object Indexing {
 
     new ObjectValue(inner.id)
   }
-
-  def initObject(cls: ClassSymbol, tmpl: Template, obj: ObjectRep)(implicit ctx: Context): Unit = {
-    cls.typeRef.fields.foreach { field =>
-      obj.add(field.symbol.name, SymInfo(assigned = false))
-    }
-
-    // primary constructor fields are init early
-    tmpl.constr.vparamss.flatten.foreach { (param: ValDef) =>
-      val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-      obj(sym) = SymInfo(assigned = true, value = Analyzer.typeState(sym.info))
-    }
-  }
 }
 
 class Analyzer {

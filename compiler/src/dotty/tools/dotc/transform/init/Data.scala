@@ -370,7 +370,7 @@ case class FunctionValue(fun: Int => Value, Heap) => Res) extends TransparentVal
 }
 
 /** An object value */
-class ObjectValue(val id: Int, val open: Boolean = true)(implicit ctx: Context) extends TransparentValue {
+class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
   /** not supported, impossible to apply an object value */
   def apply(params: Int => Value, heap: Heap): Res = ???
 
@@ -427,7 +427,7 @@ class ObjectValue(val id: Int, val open: Boolean = true)(implicit ctx: Context) 
           }
           else Res(value = symInfo.Value)
 
-        if (open && !sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
+        if (obj.open && !sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
           res += OverrideRisk(sym, pos)
 
         res
@@ -558,7 +558,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     env
   }
 
-  def newObject(heap: Heap = this.heap): ObjectRep = {
+  def newObject(heap: Heap = this.heap, open: Boolean = true): ObjectRep = {
     val obj = new ObjectRep
     heap.add(obj)
     obj
@@ -699,7 +699,7 @@ case class ClassEnv(envId: Int, val tp: Type) {
 
 /** A container holds all information about fields of an object and outers of object's classes
  */
-class ObjectRep extends HeapEntry with Cloneable {
+class ObjectRep(val open: Boolean = true) extends HeapEntry with Cloneable {
   override def clone: ObjectRep = super.clone.asInstanceOf[ObjectRep]
 
   def fresh: ObjectRep = {
