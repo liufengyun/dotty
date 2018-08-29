@@ -193,8 +193,29 @@ class Analyzer {
       checkRef(thistpe, env, pos)
   }
 
-  def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res =
-    Res(latentValue = env(sym).latentValue)
+  def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
+    if (env.hasTree(sym)) {
+      val (ddef: DefDef, env) = env.getTree(sym)
+      val value = FunctionValue { (args, heap) =>
+        if (isChecking(ddef.symbol)) {
+          // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
+          debug(s"recursive call of ${ddef.symbol} found")
+          Res()
+        }
+        else {
+          val env2 = env.fresh(heap)
+          ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+            env2.add(param.symbol, SymInfo(assigned = true, value = args(index)))
+          }
+
+          checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
+        }
+      }
+
+      Res(value = value)
+    }
+    else Res()
+  }
 
   def checkIf(tree: If, env: Env)(implicit ctx: Context): Res = {
     val If(cond, thenp, elsep) = tree

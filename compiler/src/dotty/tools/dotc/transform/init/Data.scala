@@ -535,8 +535,8 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   /** definitions introduced in current scope, class methods are in table for better performance */
   private var _symtab: mutable.Map[Symbol, Tree] = mutable.Map()
   def addTree(sym: Symbol, tree: Tree) = _symtab(sym) = tree
-  def getTree[T <: Tree](sym: Symbol): (T, Int) =
-    if (_symtab.contains(sym)) (_symtab(sym).asInstanceOf[T], id)
+  def getTree[T <: Tree](sym: Symbol): (T, Env) =
+    if (_symtab.contains(sym)) (_symtab(sym).asInstanceOf[T], this)
     else outer.getTree(sym)
   def hasTree(sym: Symbol): Boolean =
     _symtab.contains(sym) || super.hasTree(sym)
