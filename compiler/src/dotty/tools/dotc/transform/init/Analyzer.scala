@@ -98,48 +98,21 @@ object Indexing {
     case _ =>
   }
 
-  def indexInnerClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, outer: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = {
-    if (outer.classInfos.contains(cls)) {
-      val (tmpl, envId) = outer.classInfos(cls)
-      val envOuter = outer.heap(envId)
-      val innerClsEnv = envOuter.fresh()
-
-      // don't go recursively for parents as indexing is based on linearization
-      // a trick: use `ObjectRep` for name resolution, but `innerClsEnv` for method execution
-      tmpl.body.foreach {
-        case ddef: DefDef =>
-          inner.add(ddef.symbol, SymInfo(value = methodValue(ddef, innerClsEnv)))
-        case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-          inner.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = lazyValue(vdef, innerClsEnv)))
-        case vdef: ValDef =>
-          inner.add(vdef.symbol, SymInfo(assigned = false, value = FullValue))
-        case tdef: TypeDef if tdef.isClassDef  =>
-          // class has to be handled differently because of inheritance
-          inner.add(tdef.symbol, tdef.rhs.asInstanceOf[Template] -> innerClsEnv.id)
-        case _ =>
-      }
-
-      // setup this
-      val self =  new ObjectValue(obj.id)
-      innerClsEnv.add(cls, SymInfo(value = self))
-    }
-
-    Set(inner)
-  }
-
-  def indexLocalClass(cls: ClassSymbol, tp: Type, inner: ObjectRep, env: Env)(implicit ctx: Context): Set[ObjectRep] = {
-    if (env.classInfos.contains(cls)) {
-      val tmpl = env.classInfos(cls)
-
-      // don't go recursively for parents as indexing is based on linearization
-      val innerEnv = env.fresh()
-      indexStats(tmpl.body, innerEnv)
-
-      val self =  new ObjectValue(obj.id)
-      innerEnv.add(cls, SymInfo(value = self))
-    }
-
-    Set(inner)
+  /** Index local definitions
+   *
+   *  trick: use `ObjectRep` for name resolution, but `env` for method execution
+   */
+  def indexMembers(stats: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Unit = stats.foreach {
+    case ddef: DefDef =>
+      obj.add(ddef.symbol, SymInfo(value = methodValue(ddef, env)))
+    case vdef: ValDef if vdef.symbol.is(Lazy)  =>
+      obj.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = lazyValue(vdef, env)))
+    case vdef: ValDef =>
+      obj.add(vdef.symbol, SymInfo(assigned = false, value = FullValue))
+    case tdef: TypeDef if tdef.isClassDef  =>
+      // class has to be handled differently because of inheritance
+      obj.add(tdef.symbol, tdef.rhs.asInstanceOf[Template] -> env.id)
+    case _ =>
   }
 }
 

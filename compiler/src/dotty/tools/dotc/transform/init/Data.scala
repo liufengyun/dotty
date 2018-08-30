@@ -468,16 +468,30 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
   }
 
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
-    Indexing.indexInnerClass(cls, tp, obj, obj.heap(id).asInstanceOf[ObjectRep])
+    val outer = obj.heap(id).asInstanceOf[ObjectRep]
+    if (outer.classInfos.contains(cls)) {
+      val (tmpl, envId) = outer.classInfos(cls)
+      val envOuter = outer.heap(envId)
+      val innerClsEnv = envOuter.fresh()
+
+      // don't go recursively for parents as indexing is based on linearization
+      Indexing.indexMembers(tmpl.body, innerClsEnv, inner)
+
+      // setup this
+      val self =  new ObjectValue(obj.id)
+      innerClsEnv.add(cls, SymInfo(value = self))
+    }
+
+    Set(obj)
   }
 
   def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
     val heap = obj.heap
     val outer = heap(id).asInstanceOf[ObjectRep]
 
-    if (outer.classEnv.contains(cls.owner)) {
-      val outerClsEnv = heap(outer.classEnv(cls.owner).envId)
-      val (tmpl: Template, envId) = outerClsEnv.getClass(cls)
+    if (outer.classInfos.contains(cls)) {
+      val (tmpl, envId) = outer.classInfos(cls)
+      val innerClsEnv = heap(envId)
 
       // setup constructor params
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
@@ -638,17 +652,24 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     else Res()
 
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
-    Indexing.indexLocalClass(cls, tp, obj, this)
+    if (this.classInfos.contains(cls)) {
+      val tmpl = this.classInfos(cls)
+
+      // don't go recursively for parents as indexing is based on linearization
+      val innerEnv = this.fresh()
+      indexMembers(tmpl.body, innerEnv, obj)
+
+      val self =  new ObjectValue(obj.id)
+      innerEnv.add(cls, SymInfo(value = self))
+    }
+
+    Set(obj)
   }
 
   def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    if (this.containsClass(cls)) {
-      val (tmpl: Template, envId) = this.getClass(cls)
-
-      // setup this
-      val innerClsEnv = heap(obj.classEnv(cls).envId)
-      val thisInfo =  new ObjectValue(obj.id)
-      innerClsEnv.add(cls, SymInfo(value = thisInfo))
+    val heap = obj.heap
+    if (this.classInfos.contains(cls)) {
+      val (tmpl, envId) = this.classInfos(cls)
 
       // setup constructor params
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
@@ -661,8 +682,9 @@ class Env(outerId: Int) extends HeapEntry with Scope {
       checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
     }
     else {
-      // treat prefix as filled value
-      FulledValue.init(sym, constr, values, argPos, obj, pos)
+      // treat NoPrefix as full value
+      // TODO: how do we know the class does not capture/use a partial/filled outer?
+      FullValue.init(sym, constr, values, argPos, obj, pos)
     }
   }
 
@@ -714,6 +736,8 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
   def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
   def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
 
+  // Invariant: two objects with the same id always have the same `classInfos`,
+  //            thus they can be safely ignored in `join`.
   def join(obj2: ObjectRep): ObjectRep = {
     assert(this.id == obj2.id)
 
@@ -739,6 +763,11 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
     }
 
     this
+  }
+
+  override def equals(that: Any): Boolean = that match {
+    case that: ObjectRep => that.id == this.id
+    case _ => false
   }
 
   override def toString: String =
