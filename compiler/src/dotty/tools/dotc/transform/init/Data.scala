@@ -302,7 +302,7 @@ object FilledValue extends OpaqueValue {
 
 /** A function value or value of method select */
 case class FunctionValue(fun: (Int => Value, List[Position], Position, Heap) => Res) extends TransparentValue {
-  def apply(values: Int => Value, argPos: List[Position], pos: Position, heap: Heap): Res =
+  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res =
     fun(values, argPos, pos, heap)
 
   def select(sym: Symbol, heap: Heap, pos: Position): Res = {
@@ -320,82 +320,61 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
   /** not supported, impossible to apply an object value */
   def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res = ???
 
-  // TODO: handle order to resolution
-  private def resolveParent(obj: ObjectRep, sym: Symbol)(implicit ctx: Context): Res = {
-    debug(s"resolving $sym on ${obj.classSymbol}")
-    debug(obj.toString)
-    var res: Res = null
-    obj.classSymbol.classParents.foreach { parentTp =>
-      val cls = parentTp.classSymbol
-      if (parentTp.member(sym.name).exists) {
-        val info = obj(cls)
-
-        if (res == null || info.isLatent)
-          res = Res(value = info.value)
-      }
-    }
-
-    if (res != null) res
-    else if (sym.isConstructor) Res() // constructors are handled specially, see `checkNew`
-    else if (obj.classSymbol.info.memberInfo(sym).exists) { // self annotation
-      // TODO: possibility to refine based on `sym.owner` is class or trait
-      Res(value = PartialValue)
-    }
-    else {
-      debug(obj.toString)
-      throw new Exception(s"Can't resolve $sym on class ${obj.classSymbol}")
-    }
+  // handle dynamic dispatch
+  private def resolve(sym: Symbol, tp: Type, open: Boolean): Symbol = {
+    if (sym.isClass || sym.isConstructor || sym.isEffectivelyFinal || sym.is(Private)) sym
+    else sym.matchingMember(tp)
   }
 
   def select(sym: Symbol, heap: Heap, pos: Position, env: Env): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
-    if (env.contains(sym)) {
-      val symInfo = obj(sym)
-      if (sym.is(Lazy)) {
-        if (!symInfo.forced) {
-          val res = symInfo.value(Nil, obj.heap)
-          obj(sym) = symInfo.copy(forced = true, value = res.value)
+    val target = resolve(sym, obj.tp, obj.open)
+    if (env.contains(target)) {
+      val info = obj(target)
+      if (target.is(Lazy)) {
+        if (!info.forced) {
+          val res = info.value(Nil, obj.heap)
+          obj(target) = info.copy(forced = true, value = res.value)
 
           if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
           else Res(value = res.value)
         }
-        else Res(value = symInfo.value)
+        else Res(value = info.value)
       }
-      else if (sym.is(Method)) {
+      else if (target.is(Method)) {
         val res =
-          if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
-            val res2 = symInfo.value(Nil, env.heap)
+          if (target.info.isInstanceOf[ExprType]) {       // parameter-less call
+            val res2 = info.value(Nil, env.heap)
 
             if (res2.effects.nonEmpty)
-              res2.effects = Vector(Call(sym, res2.effects, pos))
+              res2.effects = Vector(Call(target, res2.effects, pos))
 
             res2
           }
-          else Res(value = symInfo.Value)
+          else Res(value = info.Value)
 
-        if (obj.open && !sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
+        if (obj.open && !target.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
           res += OverrideRisk(sym, pos)
 
         res
       }
-      else if (sym.isClass) {
-        Res(value = obj(sym).value)
-      }
       else {
         var effs = Vector.empty[Effect]
-        if (!symInfo.assigned) effs = effs :+ Uninit(sym, pos)
+        if (!info.assigned) effs = effs :+ Uninit(target, pos)
 
-        val res = Res(effects = effs, value = symInfo.value)
+        val res = Res(effects = effs, value = info.value)
 
-        if (sym.is(Deferred) && !sym.hasAnnotation(defn.InitAnnot))
-          res += UseAbstractDef(sym, pos)
+        if (target.is(Deferred) && !target.hasAnnotation(defn.InitAnnot))
+          res += UseAbstractDef(target, pos)
 
         res
       }
     }
+    else if (this.classInfos.contains(target)) Res()
     else {
-      val res = resolveParent(obj, sym)
-      res.value.select(sym, obj.heap, pos)
+      // two cases: (1) select on unknown super; (2) select on self annotation
+      if (obj.tp.classSymbol.isSubClass(target.owner)) FilledValue.select(target, heap, pos, env)
+      else PartialValue.select(target, heap, pos, env)
     }
   }
 
