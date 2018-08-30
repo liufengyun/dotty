@@ -65,7 +65,7 @@ object Indexing {
         val env2 = env.fresh(heap)
 
         ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-          env2.add(param.symbol, SymInfo(assigned = true, value = args(index)))
+          env2.add(param.symbol, value = args(index))
         }
 
         checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
@@ -73,16 +73,17 @@ object Indexing {
     }
 
   def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): FunctionValue =
-    FunctionValue { (args, argPos, pos, heap) =>
-      if (isChecking(ddef.symbol)) {
-        // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
-        debug(s"recursive call of ${ddef.symbol} found")
-        Res()
-      }
-      else {
-        val env2 = heap(env.id)
-        checking(vdef.symbol) { apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
-      }
+    new LazyValue {
+      def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res =
+        if (isChecking(vdef.symbol)) {
+          // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
+          debug(s"recursive call of ${vdef.symbol} found")
+          Res()
+        }
+        else {
+          val env2 = heap(env.id)
+          checking(vdef.symbol) { apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
+        }
     }
 
   def constructorValue(constr: DefDef, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue =
@@ -98,9 +99,8 @@ object Indexing {
         // setup constructor params
         constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
           val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-          val info = SymInfo(assigned = true, value = values(index))
-          if (sym.exists) objCurrent.add(sym, info)
-          innerClsEnv.add(param.symbol, info)
+          if (sym.exists) objCurrent.add(sym, values(index))
+          innerClsEnv.add(param.symbol, values(index))
         }
 
         checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
@@ -117,11 +117,11 @@ object Indexing {
   /** Index local definitions */
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef if !ddef.symbol.isConstructor =>  // TODO: handle secondary constructor
-      env.add(ddef.symbol, SymInfo(value = methodValue(ddef, env)))
+      env.add(ddef.symbol, methodValue(ddef, env))
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      env.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = lazyValue(vdef, env)))
+      env.add(vdef.symbol, lazyValue(vdef, env))
     case vdef: ValDef =>
-      env.add(vdef.symbol, SymInfo(assigned = false, value = FullValue))
+      env.add(vdef.symbol, NoValue)
     case tdef: TypeDef if tdef.isClassDef  =>
       // class has to be handled differently because of inheritance
       env.add(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template])
@@ -134,11 +134,11 @@ object Indexing {
    */
   def indexMembers(stats: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef =>
-      obj.add(ddef.symbol, SymInfo(value = methodValue(ddef, env)))
+      obj.add(ddef.symbol, methodValue(ddef, env))
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      obj.add(vdef.symbol, SymInfo(assigned = false, forced = false, value = lazyValue(vdef, env)))
+      obj.add(vdef.symbol, lazyValue(vdef, env))
     case vdef: ValDef =>
-      obj.add(vdef.symbol, SymInfo(assigned = false, value = FullValue))
+      obj.add(vdef.symbol, NoValue)
     case tdef: TypeDef if tdef.isClassDef  =>
       // class has to be handled differently because of inheritance
       obj.add(tdef.symbol, tdef.rhs.asInstanceOf[Template] -> env.id)
@@ -153,11 +153,11 @@ object Indexing {
 
     // index primary constructor
     val value = constructorValue(tmpl.constr, innerClsEnv, obj)
-    obj.add(tmpl.constr.symbol, SymInfo(value))
+    obj.add(tmpl.constr.symbol, value)
 
     // setup this
     val self =  new ObjectValue(obj.id)
-    innerClsEnv.add(cls, SymInfo(value = self))
+    innerClsEnv.add(cls, self)
   }
 }
 
@@ -206,7 +206,7 @@ class Analyzer {
     if (effs.size > 0) return Res(effects = effs)
 
     indentedDebug(s">>> calling $funSym")
-    val res = funRes.value(values, env.heap)
+    val res = funRes.value(values, paramInfos, args.map(_.pos), tree.pos, env.heap)
     if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
     res
   }
@@ -235,10 +235,7 @@ class Analyzer {
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
       if (cls.is(Package)) Res() // Dotty represents package path by ThisType
-      else {
-        val symInfo = env(cls)
-        Res(value = symInfo.value)
-      }
+      else Res(value = env(cls))
     case tp @ SuperType(thistpe, supertpe) =>
       // TODO : handle `supertpe`
       checkRef(thistpe, env, pos)

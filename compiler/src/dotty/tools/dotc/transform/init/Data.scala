@@ -117,7 +117,13 @@ sealed trait Value extends Scope {
   /** Apply a method or function to the provided arguments */
   def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res
 
+  /** Join two values
+   *
+   *  NoValue < Partial < Filled < Full
+   */
   def join(other: Value): Value = (this, other) match {
+    case (NoValue, _) => NoValue
+    case (_, NoValue) => NoValue
     case (v1: OpaqueValue, v2: OpaqueValue)     =>
       OpaqueValue(Math.min(state, other.state))
     case (m1: FunctionValue, m2: FunctionValue) =>
@@ -125,14 +131,10 @@ sealed trait Value extends Scope {
     case (o1: ObjectValue, o2: ObjectValue) =>
       if (o1.id == o2.id) o1
       else new UnionValue(Set(o1, o2))
-    case (v1: UnionValue, v2: UnionValue) =>
-      v1 ++ v2
-    case (uv: UnionValue, v: Value) =>
-      uv + v
-    case (v: Value, uv: UnionValue) =>
-      uv + v
-    case (v1, v2) =>
-      UnionValue(Set(v1, v2))
+    case (v1: UnionValue, v2: UnionValue) => v1 ++ v2
+    case (uv: UnionValue, v: SingleValue) => uv + v
+    case (v: SingleValue, uv: UnionValue) => uv + v
+    case (v1: SingleValue, v2: SingleValue) => UnionValue(Set(v1, v2))
     case _ =>
       throw new Exception(s"Can't join $this and $other")
   }
@@ -162,6 +164,10 @@ sealed trait Value extends Scope {
   }
 }
 
+/** The value is absent */
+object NoValue extends Value
+
+/** A single value, instead of a union value */
 trait SingleValue extends Value
 
 /** Union of values */
@@ -192,7 +198,7 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
     }
   }
 
-  def +(value: Value): UnionValue = UnionValue(values + value)
+  def +(value: SingleValue): UnionValue = UnionValue(values + value)
   def ++(uv: UnionValue): UnionValue = UnionValue(values + uv.values)
 }
 
@@ -227,9 +233,6 @@ sealed class OpaqueValue extends SingleValue {
   def meet(that: OpaqueValue): OpaqueValue =
     if (this < that) that else this
 }
-
-/** Values that are subject to analysis rather than type checking */
-sealed trait TransparentValue extends SingleValue
 
 object FullValue extends OpaqueValue {
   def select(sym: Symbol, heap: Heap, pos: Position): Res = Res()
@@ -301,7 +304,7 @@ object FilledValue extends OpaqueValue {
 
 
 /** A function value or value of method select */
-case class FunctionValue(fun: (Int => Value, List[Position], Position, Heap) => Res) extends TransparentValue {
+case class FunctionValue(fun: (Int => Value, List[Position], Position, Heap) => Res) extends SingleValue {
   def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res =
     fun(values, argPos, pos, heap)
 
@@ -315,8 +318,15 @@ case class FunctionValue(fun: (Int => Value, List[Position], Position, Heap) => 
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = ???
 }
 
+abstract class LazyValue extends Value {
+  // not supported
+  def select(sym: Symbol, heap: Heap, pos: Position): Res = ???
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = ???
+}
+
 /** An object value */
-class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
+class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
   /** not supported, impossible to apply an object value */
   def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res = ???
 
@@ -330,28 +340,28 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
     val obj = heap(id).asInstanceOf[ObjectRep]
     val target = resolve(sym, obj.tp, obj.open)
     if (env.contains(target)) {
-      val info = obj(target)
+      val value = obj(target)
       if (target.is(Lazy)) {
-        if (!info.forced) {
-          val res = info.value(Nil, obj.heap)
-          obj(target) = info.copy(forced = true, value = res.value)
+        if (value.isInstanceOf[LazyValue]) {
+          val res = value(Nil, Nil, Nil, pos, obj.heap)
+          obj(target) = res.value
 
           if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
           else Res(value = res.value)
         }
-        else Res(value = info.value)
+        else Res(value = value)
       }
       else if (target.is(Method)) {
         val res =
           if (target.info.isInstanceOf[ExprType]) {       // parameter-less call
-            val res2 = info.value(Nil, env.heap)
+            val res2 = value(Nil, Nil, Nil, pos, env.heap)
 
             if (res2.effects.nonEmpty)
               res2.effects = Vector(Call(target, res2.effects, pos))
 
             res2
           }
-          else Res(value = info.Value)
+          else Res(value = Value)
 
         if (obj.open && !target.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
           res += OverrideRisk(sym, pos)
@@ -360,9 +370,9 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
       }
       else {
         var effs = Vector.empty[Effect]
-        if (!info.assigned) effs = effs :+ Uninit(target, pos)
+        if (value == NoValue) effs = effs :+ Uninit(target, pos)
 
-        val res = Res(effects = effs, value = info.value)
+        val res = Res(effects = effs, value = value)
 
         if (target.is(Deferred) && !target.hasAnnotation(defn.InitAnnot))
           res += UseAbstractDef(target, pos)
@@ -382,7 +392,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
     val obj = heap(id).asInstanceOf[ObjectRep]
     val target = resolve(sym, obj.tp, obj.open)
     if (obj.contains(target)) {
-      obj(target) = SymInfo(assigned = true, value = value)
+      obj(target) = value
       Res()
     }
     else {
@@ -401,7 +411,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
     }
     else {
       val value = Indexing.unknownConstructorValue(cls)
-      obj.add(cls.primaryConstructor, SymInfo(value = value))
+      obj.add(cls.primaryConstructor, value)
     }
 
     Set(obj)
@@ -419,31 +429,25 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
 //           environment
 //=======================================
 
-/** Information about fields or local variables
- *
- *  TODO: possibility to remove this concept by introducing `NoValue`
- */
-case class SymInfo(assigned: Boolean = true, forced: Boolean = false, value: Value)
-
 /** The state of closure and objects
-  *
-  *  @param outerId required for modelling closures
-  *
-  *  Invariants:
-  *  1. the data stored in the immutable map must be immutable
-  *  2. environment refer each other via `id`, which implies TransparentValue should
-  *     never use captured environment other than its `id`.
-  */
+ *
+ *  @param outerId required for modelling closures
+ *
+ *  Invariants:
+ *  1. the data stored in the immutable map must be immutable
+ *  2. environment refer each other via `id`, which implies values should
+ *     never use captured environment other than its `id`.
+ */
 class Env(outerId: Int) extends HeapEntry with Scope {
   assert(outerId != id)
 
   /** local symbols defined in current scope */
-  protected var _syms: Map[Symbol, SymInfo] = Map()
+  protected var _syms: Map[Symbol, Value] = Map()
 
   /** local class definitions */
-  private var _classInfos: Map[ClassSymbol, (Template, Int)] = List()
-  def add(cls: ClassSymbol, info: (Template, Int)) = _classInfos(cls) = info
-  def classInfos: Map[ClassSymbol, (Template, Int)] = _classInfos
+  private var _classInfos: Map[ClassSymbol, Template] = List()
+  def add(cls: ClassSymbol, tmpl: Template) = _classInfos(cls) = tmpl
+  def classInfos: Map[ClassSymbol, Template] = _classInfos
 
   def outer: Env = heap(outerId).asInstanceOf[Env]
 
@@ -464,16 +468,16 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     obj
   }
 
-  def apply(sym: Symbol): SymInfo =
+  def apply(sym: Symbol): Value =
     if (_syms.contains(sym)) _syms(sym)
     else outer(sym)
 
-  def add(sym: Symbol, info: SymInfo) =
-    _syms = _syms.updated(sym, info)
+  def add(sym: Symbol, value: Value) =
+    _syms = _syms.updated(sym, value)
 
-  def update(sym: Symbol, info: SymInfo): Unit =
-    if (_syms.contains(sym)) _syms = _syms.updated(sym, info)
-    else outer.update(sym, info)
+  def update(sym: Symbol, value: Value): Unit =
+    if (_syms.contains(sym)) _syms = _syms.updated(sym, value)
+    else outer.update(sym, value)
 
   def contains(sym: Symbol): Boolean = _syms.contains(sym) || outer.contains(sym)
 
@@ -483,24 +487,10 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   def join(env2: Env): Env = {
     assert(this.id == env2.id)
 
-    _syms.foreach { case (sym: Symbol, info: SymInfo) =>
+    _syms.foreach { case (sym: Symbol, value: Value) =>
       assert(env2.contains(sym))
-      val info2 = env2._syms(sym)
-      // path-insensitive approximation:
-      // 1. if a variable is assigned in one branch, but not in the other branch, we
-      //    treat the variable as not assigned.
-      // 2. a lazy variable is force if it's forced in either branch
-      // 3. a variable gets the lowest possible state
-      if (!info.assigned || !info2.assigned)
-        _syms = _syms.updated(sym, info.copy(assigned = false, transparentValue = NoTransparent))
-      else {
-        val infoRes = info.copy(
-          assigned   =  true,
-          forced     =  info.forced || info2.forced,
-          value      =  info.value.join(info2.value)
-        )
-        _syms = _syms.updated(sym, infoRes)
-      }
+      val value2 = env2._syms(sym)
+      _syms = _syms.updated(sym, value.join(value2))
     }
 
     this
@@ -509,7 +499,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   /** Assign to a local variable, i.e. TermRef with NoPrefix */
   def assign(sym: Symbol, value: Value, pos: Position)(implicit ctx: Context): Res =
     if (this.contains(sym)) {
-      this(sym) = SymInfo(assigned = true, value = value)
+      this(sym) = value
       Res()
     }
     else if (value.widen != FullValue) // leak assign
@@ -520,33 +510,32 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   /** Select a local variable, i.e. TermRef with NoPrefix */
   def select(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
     if (this.contains(sym)) {
-      val symInfo = this(sym)
+      val value = this(sym)
       if (sym.is(Lazy)) {
-        if (!symInfo.forced) {
-          val res = symInfo.value(i => FullValue, this.heap)
-          this(sym) = symInfo.copy(forced = true, value = res.value)
+        if (value.isInstanceOf[LazyValue]) {
+          val res = value(Nil, Nil, Nil, pos, this.heap)
+          this(sym) = res.value
 
           if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
           else Res(value = res.value)
         }
-        else Res(value = symInfo.value)
+        else Res(value = value)
       }
       else if (sym.is(Method)) {
         if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
-          val res2 = symInfo.value(i => FullValue, this.heap)
+          val res2 = value(Nil, Nil, Nil, pos, this.heap)
 
           if (res2.effects.nonEmpty)
             res2.effects = Vector(Call(sym, res2.effects, pos))
 
           res2
         }
-        else Res(value = symInfo.value)
+        else Res(value = value)
       }
       else {
         var effs = Vector.empty[Effect]
-        if (!symInfo.assigned) effs = effs :+ Uninit(sym, pos)
-
-        Res(effects = effs, value = symInfo.value)
+        if (value == NoValue) Res(effects = effs :+ Uninit(sym, pos))
+        else Res(value = value)
       }
     }
     else if (this.classInfos.contains(sym)) Res()
@@ -564,7 +553,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
     }
     else {
       val value = Indexing.unknownConstructorValue(cls)
-      obj.add(cls.primaryConstructor, SymInfo(value = value))
+      obj.add(cls.primaryConstructor, value)
     }
 
     Set(obj)
@@ -598,18 +587,18 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
   def classInfos: Map[ClassSymbol, (Template, Int)] = _classInfos
 
   /** methods and fields of the object */
-  private var _syms: Map[Symbol, SymInfo] = Map()
+  private var _syms: Map[Symbol, Value] = Map()
 
-  def apply(sym: Symbol): SymInfo =
+  def apply(sym: Symbol): Value =
     _syms(sym)
 
-  def add(sym: Symbol, info: SymInfo) =
-    _syms = _syms.updated(sym, info)
+  def add(sym: Symbol, value: Value) =
+    _syms = _syms.updated(sym, value)
 
   // object environment should not resolve outer
-  def update(sym: Symbol, info: SymInfo): Unit = {
+  def update(sym: Symbol, value: Value): Unit = {
     assert(_syms.contains(sym))
-    _syms = _syms.updated(sym, info)
+    _syms = _syms.updated(sym, value)
   }
 
   def contains(sym: Symbol): Boolean =
@@ -623,24 +612,10 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
   def join(obj2: ObjectRep): ObjectRep = {
     assert(this.id == obj2.id)
 
-    _syms.foreach { case (sym: Symbol, info: SymInfo) =>
+    _syms.foreach { case (sym: Symbol, value: Value) =>
       assert(obj2.contains(sym))
-      val info2 = obj2._syms(sym)
-      // path-insensitive approximation:
-      // 1. if a variable is assigned in one branch, but not in the other branch, we
-      //    treat the variable as not assigned.
-      // 2. a lazy variable is force if it's forced in either branch
-      // 3. a variable gets the lowest possible state
-      if (!info.assigned || !info2.assigned)
-        _syms = _syms.updated(sym, info.copy(assigned = false, transparentValue = NoTransparent))
-      else {
-        val infoRes = info.copy(
-          assigned   =  true,
-          forced     =  info.forced || info2.forced,
-          value      =  info.value.join(info2.value)
-        )
-
-        _syms = _syms.updated(sym, infoRes)
+      val value2 = obj2._syms(sym)
+        _syms = _syms.updated(sym, value.join(value2))
       }
     }
 

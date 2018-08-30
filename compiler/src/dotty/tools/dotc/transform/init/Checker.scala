@@ -142,9 +142,9 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       // and whether children are possible in other modules.
 
     // index fields
-    cls.typeRef.fields.foreach { field =>
-      obj.add(field.symbol, SymInfo(assigned = false, value = FullValue))
-    }
+    // cls.typeRef.fields.foreach { field =>
+    //   obj.add(field.symbol, NoValue)
+    // }
 
     // for recursive usage
     root.addClass(cls, tmpl)
@@ -169,16 +169,16 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
   def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
     def recur(cls: Symbol, maxValue: OpaqueValue): Unit = if (cls.owner.exists) {
-      val outerValue = symbolValue(cls)
+      val outerValue = Analyzer.symbolValue(cls)
       val enclosingCls = cls.owner.enclosingClass
 
       if (!cls.owner.isClass || maxValue == FullValue) {
-        env.add(enclosingCls, SymInfo(value = FullValue))
+        env.add(enclosingCls, FullValue)
         recur(enclosingCls, FullValue)
       }
       else {
         val meet = outerValue.join(maxValue)
-        env.add(enclosingCls, SymInfo(value = meet)
+        env.add(enclosingCls, meet)
         recur(enclosingCls, meet)
       }
     }
