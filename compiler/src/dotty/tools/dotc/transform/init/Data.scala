@@ -380,13 +380,15 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
 
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = {
     val obj = heap(id).asInstanceOf[ObjectRep]
-    if (obj.contains(sym)) {
-      obj(sym) = SymInfo(assigned = true, value = value)
+    val target = resolve(sym, obj.tp, obj.open)
+    if (obj.contains(target)) {
+      obj(target) = SymInfo(assigned = true, value = value)
       Res()
     }
     else {
-      val parentRes = Rules.resolveParent(obj, sym)
-      assign(parentRes, sym, value, obj.heap, pos)
+      // two cases: (1) select on unknown super; (2) select on self annotation
+      if (obj.tp.classSymbol.isSubClass(target.owner)) FilledValue.assign(target, value, heap, pos)
+      else PartialValue.assign(target, value, heap, pos)
     }
   }
 
