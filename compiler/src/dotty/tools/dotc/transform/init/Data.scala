@@ -110,9 +110,6 @@ sealed trait Scope {
 
   /** Index an inner class with current value as the immediate outer */
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep]
-
-  /** Execute the constructor of an inner class for the fresh object `obj` */
-  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res
 }
 
 /** Abstract values in analysis */
@@ -241,16 +238,6 @@ object FullValue extends OpaqueValue {
     if (!value.widen(heap, pos).isFull)
       Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
     else Res()
-
-  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    val heap = obj.heap
-    val paramInfos = constr.widen.paramInfoss.flatten
-    val paramRes = apply(values, paramInfos, argPos, pos, heap)
-    if (paramRes.hasErrors) return paramRes
-
-    val partial = values.exists(_.widen < FullValue)
-    if (partial) Res(value = FilledValue) else Res()
-  }
 }
 
 object PartialValue extends OpaqueValue {
@@ -265,6 +252,10 @@ object PartialValue extends OpaqueValue {
       if (!Analyzer.isPartial(sym))
         res += Generic(s"The lazy field $sym should be marked as `@partial` in order to be accessed", pos)
     }
+    else if (sym.isClass) {
+      if (!Analyzer.isPartial(sym))
+        res += Generic(s"The nested $sym should be marked as `@partial` in order to be instantiated", pos)
+    }
     else {  // field select
       if (!Analyzer.isPrimaryConstructorFields(sym) && !sym.owner.is(Trait))
         res += Generic(s"Cannot access field $sym on a partial object", pos)
@@ -276,19 +267,6 @@ object PartialValue extends OpaqueValue {
 
   /** assign to partial is always fine? */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = Res()
-
-  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    val heap = obj.heap
-    val paramInfos = constr.widen.paramInfoss.flatten
-    val paramRes = apply(values, paramInfos, argPos, pos, heap)
-    if (paramRes.hasErrors) return paramRes
-
-    // check @annotation
-    if (!Analyzer.isPartial(cls))
-      Res(effects = Generic(s"The nested $sym should be marked as `@partial` in order to be instantiated", pos))
-    else
-      Res(value = FilledValue)
-  }
 }
 
 object FilledValue extends OpaqueValue {
@@ -319,19 +297,6 @@ object FilledValue extends OpaqueValue {
     if (value.widen(heap, pos) < Analyzer.typeValue(sym.info))
       Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", pos)))
     Res()
-
-  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    val heap = obj.heap
-    val paramInfos = constr.widen.paramInfoss.flatten
-    val paramRes = apply(values, paramInfos, argPos, pos, heap)
-    if (paramRes.hasErrors) return paramRes
-
-    // check @annotation
-    if (!Analyzer.isPartial(cls) && !Analyzer.isFilled(cls))
-      Res(effects = Generic(s"The nested $cls should be marked as `@partial` or `@filled` in order to be instantiated", pos))
-    else
-      Res()
-  }
 }
 
 
@@ -348,7 +313,6 @@ case class FunctionValue(fun: (Int => Value, List[Position], Position, Heap) => 
   /** not supported */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = ???
-  def init(sym: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], heap: Heap, obj: ObjectRep, pos: Position): Res = ???
 }
 
 /** An object value */
@@ -452,35 +416,14 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends TransparentValue {
     if (outer.classInfos.contains(cls)) {
       val (tmpl, envId) = outer.classInfos(cls)
       val envOuter = outer.heap(envId)
-      val innerClsEnv = envOuter.fresh()
-
-      // don't go recursively for parents as indexing is based on linearization
-      Indexing.indexMembers(tmpl.body, innerClsEnv, inner)
-
-      // index primary constructor
-      val value = Indexing.constructorValue(tmpl.constr, innerClsEnv, obj)
-      obj.add(tmpl.constr, SymInfo(value))
-
-      // setup this
-      val self =  new ObjectValue(obj.id)
-      innerClsEnv.add(cls, SymInfo(value = self))
+      Indexing.indexClass(cls, tmpl, obj, envOuter)
+    }
+    else {
+      val value = Indexing.unknownConstructorValue(cls)
+      obj.add(cls.primaryConstructor, SymInfo(value = value))
     }
 
     Set(obj)
-  }
-
-  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    val heap = obj.heap
-
-    if (obj.contains(constr)) {
-      val paramInfos = constr.widen.paramInfoss.flatten
-      val info = obj(constr)
-      info.value.apply(values, paramTps, argPos, pos, heap)
-    }
-    else {
-      // treat prefix as filled value
-      FilledValue.init(sym, constr, values, argPos, obj, pos)
-    }
   }
 
   override def hashCode = id
@@ -636,35 +579,14 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
     if (this.classInfos.contains(cls)) {
       val tmpl = this.classInfos(cls)
-
-      // don't go recursively for parents as indexing is based on linearization
-      val innerEnv = this.fresh()
-      Indexing.indexMembers(tmpl.body, innerEnv, obj)
-
-      // index primary constructor
-      val value = Indexing.constructorValue(tmpl.constr, innerEnv, obj)
-      obj.add(tmpl.constr, SymInfo(value))
-
-      // set up this
-      val self =  new ObjectValue(obj.id)
-      innerEnv.add(cls, SymInfo(value = self))
+      Indexing.indexClass(cls, tmpl, obj, this)
+    }
+    else {
+      val value = Indexing.unknownConstructorValue(cls)
+      obj.add(cls.primaryConstructor, SymInfo(value = value))
     }
 
     Set(obj)
-  }
-
-  def init(cls: ClassSymbol, constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectRep, pos: Position): Res = {
-    val heap = obj.heap
-
-    if (obj.contains(constr)) {
-      val paramInfos = constr.widen.paramInfoss.flatten
-      val info = obj(constr)
-      info.apply(values, paramTps, argPos, pos, heap)
-    }
-    else {
-      // treat prefix as filled value
-      FilledValue.init(sym, constr, values, argPos, obj, pos)
-    }
   }
 
   override def toString: String =

@@ -55,7 +55,7 @@ object Analyzer {
 
 object Indexing {
   def methodValue(ddef: DefDef, env: Env)(implicit ctx: Context): FunctionValue =
-    FunctionValue { (args, heap) =>
+    FunctionValue { (args, argPos, pos, heap) =>
       if (isChecking(ddef.symbol)) {
         // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
         debug(s"recursive call of ${ddef.symbol} found")
@@ -73,7 +73,7 @@ object Indexing {
     }
 
   def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): FunctionValue =
-    FunctionValue { (args, heap) =>
+    FunctionValue { (args, argPos, pos, heap) =>
       if (isChecking(ddef.symbol)) {
         // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
         debug(s"recursive call of ${ddef.symbol} found")
@@ -86,7 +86,7 @@ object Indexing {
     }
 
   def constructorValue(constr: DefDef, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue =
-    FunctionValue { (params, heap) =>
+    FunctionValue { (args, argPos, pos, heap) =>
       if (isChecking(cls)) {
         debug(s"recursive creation of $cls found")
         Res()
@@ -105,6 +105,13 @@ object Indexing {
 
         checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
       }
+    }
+
+  def unknownConstructorValue(cls: ClassSymbol)(implicit ctx: Context): Value =
+    FunctionValue {
+      (values: Int => Value, argPos: List[Position], pos: Position, heap: Heap) =>
+        val paramInfos = cls.primaryConstructor.info.paramInfoss.flatten
+        FilledValue.apply(values, paramInfos, argPos, pos, heap)
     }
 
   /** Index local definitions */
@@ -136,6 +143,21 @@ object Indexing {
       // class has to be handled differently because of inheritance
       obj.add(tdef.symbol, tdef.rhs.asInstanceOf[Template] -> env.id)
     case _ =>
+  }
+
+  def indexClass(cls: ClassSymbol, tmpl: Template, obj: ObjectRep, env: Env)(implicit ctx: Context): Unit = {
+    val innerClsEnv = env.fresh()
+
+    // don't go recursively for parents as indexing is based on linearization
+    indexMembers(tmpl.body, innerClsEnv, inner)
+
+    // index primary constructor
+    val value = constructorValue(tmpl.constr, innerClsEnv, obj)
+    obj.add(tmpl.constr.symbol, SymInfo(value))
+
+    // setup this
+    val self =  new ObjectValue(obj.id)
+    innerClsEnv.add(cls, SymInfo(value = self))
   }
 }
 
@@ -378,7 +400,7 @@ class Analyzer {
     }
 
     val objValues = objs.map { obj =>
-      val res = obj.select(init.symbol).apply(argValues, args.map(_.pos), tree.pos)
+      val res = obj(init.symbol).apply(argValues, args.map(_.pos), tree.pos)
       // reduce number of errors
       if (res.hasErrors) return Res(effects = res.effects)
 
