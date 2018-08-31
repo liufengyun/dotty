@@ -47,7 +47,7 @@ trait Indexer { self: Analyzer =>
 
   def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): LazyValue =
     new LazyValue {
-      def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res =
+      def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res =
         if (isChecking(vdef.symbol)) {
           // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
           debug(s"recursive call of ${vdef.symbol} found")

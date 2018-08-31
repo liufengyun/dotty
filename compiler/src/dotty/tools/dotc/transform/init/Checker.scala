@@ -151,7 +151,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     indexOuter(cls, root)
 
     // index object
-    root.index(cls, cls.typeRef, obj, analyzer)
+    root.index(cls, obj, analyzer)
 
     // init object
     val constr = tmpl.constr

@@ -114,7 +114,7 @@ class Heap extends Cloneable {
  *  2. environment refer each other via `id`, which implies values should
  *     never use captured environment other than its `id`.
  */
-class Env(outerId: Int) extends HeapEntry with Scope {
+class Env(outerId: Int) extends HeapEntry {
   assert(outerId != id)
 
   /** local symbols defined in current scope */
@@ -227,7 +227,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
       Res()
     }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = {
+  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = {
     if (this.containsClass(cls)) {
       val tmpl = this.getClassDef(cls)
       indexer.indexClass(cls, tmpl, obj, this)

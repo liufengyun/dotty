@@ -134,7 +134,7 @@ class Analyzer extends Indexer {
       case tp @ TermRef(prefix, _) =>
         val prefixRes = checkRef(prefix, env, vdef.rhs.pos)
         assert(!prefixRes.hasErrors)
-        prefixRes.latentValue.asObject.assign(sym, rhsRes.value, env.heap, vdef.pos)
+        prefixRes.value.assign(sym, rhsRes.value, env.heap, vdef.pos)
     }
 
     Res(effects = rhsRes.effects)
@@ -186,28 +186,28 @@ class Analyzer extends Indexer {
     }
   }
 
-  def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectValue)(implicit ctx: Context): Res = {
+  def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Res = {
     if (cls.is(Trait)) return Res()
 
     // first call super class, see spec 5.1 about "Template Evaluation".
-    parents.head.foreach {
+    parents.head match {
       case parent @ NewEx(tref, init, argss) =>
-        val res = checkParent(parent, init.symbol, argss, env, obj)
+        val res = checkParent(init.symbol, argss, env, obj, parent.pos)
         if (res.hasErrors) return res
     }
 
-    val superCls = parents.first.tpe.classSymbol
+    val superCls = parents.head.tpe.classSymbol
     val remains = cls.baseClasses.tail.takeWhile(_ `ne` superCls).reverse
 
     // handle remaning traits
     remains.foreach { traitCls =>
-      val parentOpt = parents.find(_.tpe.classSymbol `eq` p)
+      val parentOpt = parents.find(_.tpe.classSymbol `eq` traitCls)
       parentOpt match {
         case Some(parent @ NewEx(tref, init, argss)) =>
-          val res = checkParent(parent, init.symbol, argss, env, obj)
+          val res = checkParent(init.symbol, argss, env, obj, parent.pos)
           if (res.hasErrors) return res
         case _ =>
-          val res = checkParent(traitCls.primaryConstructor, Nil, env, obj, cls)
+          val res = checkParent(traitCls.primaryConstructor, Nil, env, obj, cls.pos)
           if (res.hasErrors) return res
       }
     }
@@ -216,8 +216,9 @@ class Analyzer extends Indexer {
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
-    val cls = tref.classSymbol
+    val cls = tref.classSymbol.asClass
     val args = argss.flatten
+    val paramInfos = cls.primaryConstructor.info.paramInfoss.flatten
 
     // setup constructor params
     var effs = Vector.empty[Effect]
@@ -231,15 +232,7 @@ class Analyzer extends Indexer {
 
     val obj = env.newObject(tree.tpe, open = false)
 
-    val scope: Scope =
-      if (tref.prefix == NoPrefix) env
-      else {
-        val prefixRes = checkRef(tref.prefix, env, parent.pos)
-        if (prefixRes.hasErrors) return prefixRes
-        prefixRes.value
-      }
-
-    def toPrefix(tp: Type): TypeRef = tp match {
+    def toPrefix(tp: Type): Type = tp match {
       case AppliedType(tycon, _) => toPrefix(tycon.dealias)
       case tp: TypeRef => tp.prefix
     }
@@ -248,27 +241,24 @@ class Analyzer extends Indexer {
     val objs = cls.baseClasses.flatMap { parent =>
       val baseType = tree.tpe.baseType(parent)
       val prefix = toPrefix(baseType)
-      val scope =
-        if (prefix == NoPrefix) env
+        if (prefix == NoPrefix) env.index(cls, obj, this)
         else {
           val prefixRes = checkRef(prefix, env, parent.pos)
-          if (prefixRes.hasErrors) prefixRes
-          else prefixRes.value
+          if (prefixRes.hasErrors) return prefixRes
+          prefixRes.value.index(cls, obj, this)
         }
-
-      scope.index(cls, tp, obj)
     }
 
     val objValues = objs.map { obj =>
-      val res = obj(init.symbol).apply(argValues, args.map(_.pos), tree.pos)
+      val res = obj(init.symbol).apply(argValues, paramInfos, args.map(_.pos), tree.pos, obj.heap)
       // reduce number of errors
       if (res.hasErrors) return Res(effects = res.effects)
 
       new ObjectValue(obj.id)
     }
 
-    if (objValues.size == 1) objValues.head
-    else new UnionValue(objValues)
+    if (objValues.size == 1) Res(value = objValues.head)
+    else Res(value = new UnionValue(objValues.toSet))
   }
 
   /** Check a parent call
@@ -280,6 +270,7 @@ class Analyzer extends Indexer {
    */
   def checkParent(init: Symbol, argss: List[List[Tree]], env: Env, obj: ObjectRep, pos: Position)(implicit ctx: Context): Res = {
     val args = argss.flatten
+    val paramInfos = init.info.paramInfoss.flatten
 
     // setup constructor params
     var effs = Vector.empty[Effect]
@@ -291,7 +282,7 @@ class Analyzer extends Indexer {
 
     if (effs.nonEmpty) return Res(effs)
 
-    obj.select(init).apply(argValues, args.map(_.pos), pos)
+    obj(init).apply(argValues, paramInfos, args.map(_.pos), pos, obj.heap)
   }
 
   object NewEx {
@@ -311,7 +302,7 @@ class Analyzer extends Indexer {
   }
 
   def checkTemplate(cls: ClassSymbol, tp: Type, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context) = {
-    checkParents(tmpl.parents, env, obj).join(checkStats(tmpl.body, env))
+    checkParents(cls, tmpl.parents, env, obj).join(checkStats(tmpl.body, env))
   }
 
   def apply(tree: Tree, env: Env)(implicit ctx: Context): Res = trace("checking " + tree.show, env)(tree match {
