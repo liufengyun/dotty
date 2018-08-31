@@ -40,8 +40,8 @@ package object init {
 
 
     def value(implicit ctx: Context) =
-      if (isPartial(sym)) PartialValue
-      else if (isFilled(sym)) FilledValue
+      if (isPartial) PartialValue
+      else if (isFilled) FilledValue
       else FullValue
 
     def isConcreteField(implicit ctx: Context) =
