@@ -215,7 +215,7 @@ class Analyzer {
     Res()
   }
 
-  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)implicit ctx: Context): Res = {
+  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val cls = tref.classSymbol
     val args = argss.flatten
 

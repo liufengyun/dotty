@@ -1,6 +1,5 @@
 package dotty.tools.dotc
 package transform
-package init
 
 import core._
 import MegaPhase._
@@ -21,8 +20,8 @@ import util.Positions._
 import Constants.Constant
 import collection.mutable
 
-package object {
-  implicit class TypeOps(tp: Type) extends AnyVal {
+package object init {
+  implicit class TypeOps(val tp: Type) extends AnyVal {
     def isPartial(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.PartialAnnot)
     def isFilled(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.FilledAnnot)
 
@@ -32,7 +31,7 @@ package object {
       else FullValue
   }
 
-  implicit class SymOps(sym: Symbol) extends AnyVal {
+  implicit class SymOps(val sym: Symbol) extends AnyVal {
     def isPartial(implicit ctx: Context) = sym.hasAnnotation(defn.PartialAnnot)
     def isFilled(implicit ctx: Context) = sym.hasAnnotation(defn.FilledAnnot)
     def isInit(implicit ctx: Context) = sym.hasAnnotation(defn.InitAnnot)

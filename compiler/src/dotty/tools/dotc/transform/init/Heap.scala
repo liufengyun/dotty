@@ -24,6 +24,9 @@ trait HeapEntry extends Cloneable {
   var heap: Heap = null
 
   override def clone: HeapEntry = super.clone.asInstanceOf[HeapEntry]
+
+  def asEnv: Env = this.asInstanceOf[Env]
+  def asObj: ObjectRep = this.asInstanceOf[ObjectRep]
 }
 
 object Heap {
@@ -218,7 +221,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
       Res()
     }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = {
     if (this.classInfos.contains(cls)) {
       val tmpl = this.classInfos(cls)
       Indexing.indexClass(cls, tmpl, obj, this)
@@ -287,8 +290,7 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
     _syms.foreach { case (sym: Symbol, value: Value) =>
       assert(obj2.contains(sym))
       val value2 = obj2._syms(sym)
-        _syms = _syms.updated(sym, value.join(value2))
-      }
+      _syms = _syms.updated(sym, value.join(value2))
     }
 
     this

@@ -19,21 +19,21 @@ import collection.mutable
 //             values
 //=======================================
 
-sealed trait Scope {
+trait Scope {
   /** Select a member on a value */
-  def select(sym: Symbol, heap: Heap, pos: Position): Res
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res
 
   /** Assign on a value */
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res
 
   /** Index an inner class with current value as the immediate outer */
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep]
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep]
 }
 
 /** Abstract values in analysis */
 sealed trait Value extends Scope {
   /** Apply a method or function to the provided arguments */
-  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res
+  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res
 
   /** Join two values
    *
@@ -42,10 +42,8 @@ sealed trait Value extends Scope {
   def join(other: Value): Value = (this, other) match {
     case (NoValue, _) => NoValue
     case (_, NoValue) => NoValue
-    case (v1: OpaqueValue, v2: OpaqueValue)     =>
-      OpaqueValue(Math.min(state, other.state))
-    case (m1: FunctionValue, m2: FunctionValue) =>
-      UnionValue(Set(m1, m2))
+    case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
+    case (m1: FunctionValue, m2: FunctionValue) => UnionValue(Set(m1, m2))
     case (o1: ObjectValue, o2: ObjectValue) =>
       if (o1.id == o2.id) o1
       else new UnionValue(Set(o1, o2))
@@ -61,20 +59,20 @@ sealed trait Value extends Scope {
    *
    *  Widening is needed at analysis boundary.
    */
-  def widen(heap: Heap, pos: Position): OpaqueValue = {
+  def widen(heap: Heap, pos: Position)(implicit ctx: Context): OpaqueValue = {
     val testHeap = heap.clone
     def recur(value: Value): OpaqueValue = value match {
       case ov: OpaqueValue => ov
       case fv: FunctionValue =>
-        val res = fv(FullValue, testHeap)
+        val res = fv(i => FullValue, Nil, Nil, pos, testHeap)
         if (res.hasErrors) FilledValue
         else recur(res.value)
       case obj: ObjectValue =>
         FilledValue
       case UnionValue(vs) =>
-        vs.foldLeft(FullValue) { (v, acc) =>
+        vs.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           if (v == PartialValue) return PartialValue
-          else recur(v).join(acc)
+          else acc.join(recur(v))
         }
     }
 
@@ -90,25 +88,25 @@ trait SingleValue extends Value
 
 /** Union of values */
 case class UnionValue(val values: Set[SingleValue]) extends Value {
-  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res = {
+  def apply(args: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res = {
     values.foldLeft(Res()) { (acc, value) =>
-      value.apply(values, paramTps, argPos, pos heap).join(acc)
+      value.apply(args, paramTps, argPos, pos, heap).join(acc)
     }
   }
 
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     values.foldLeft(Res()) { (acc, value) =>
       value.select(sym, heap, pos).join(acc)
     }
   }
 
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = {
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     values.foldLeft(Res()) { (acc, value) =>
       value.assign(sym, value, heap, pos).join(acc)
     }
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = {
     var used = false
     values.flatMap { value =>
       val obj2 = if (used) obj.fresh else { used = true; obj }
@@ -117,26 +115,25 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
   }
 
   def +(value: SingleValue): UnionValue = UnionValue(values + value)
-  def ++(uv: UnionValue): UnionValue = UnionValue(values + uv.values)
+  def ++(uv: UnionValue): UnionValue = UnionValue(values ++ uv.values)
 }
 
 /** Values that are subject to type checking rather than analysis */
 sealed class OpaqueValue extends SingleValue {
-  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res = {
+  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res = {
     assert(this == FullValue)
 
-    def paramValue(index: Int) = paramTps(index).value
-
-    values.zipWithIndex.foreach { case (value, index) =>
+    paramTps.zipWithIndex.foreach { case (tp, index: Int) =>
+      val value = values(index)
       val pos = argPos(index)
-      if (value.widen(heap, pos) < paramValue(index))
+      if (value.widen(heap, pos) < tp.value)
         return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
     }
 
     Res()
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = Set(obj)
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = Set(obj)
 
   def <(that: OpaqueValue): Boolean = (this, that) match {
     case (FullValue, _) => false
@@ -153,23 +150,23 @@ sealed class OpaqueValue extends SingleValue {
 }
 
 object FullValue extends OpaqueValue {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = Res()
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = Res()
 
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res =
-    if (!value.widen(heap, pos).isFull)
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res =
+    if (value.widen(heap, pos) != FullValue)
       Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
     else Res()
 }
 
 object PartialValue extends OpaqueValue {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val res = Res()
 
-    if (sym.is(Method)) {
+    if (sym.is(Flags.Method)) {
       if (!sym.isPartial)
         res += Generic(s"The $sym should be marked as `@partial` in order to be called", pos)
     }
-    else if (sym.is(Lazy)) {
+    else if (sym.is(Flags.Lazy)) {
       if (!sym.isPartial)
         res += Generic(s"The lazy field $sym should be marked as `@partial` in order to be accessed", pos)
     }
@@ -178,7 +175,7 @@ object PartialValue extends OpaqueValue {
         res += Generic(s"The nested $sym should be marked as `@partial` in order to be instantiated", pos)
     }
     else {  // field select
-      if (!sym.isPrimaryConstructorFields && !sym.owner.is(Trait))
+      if (!sym.isPrimaryConstructorFields && !sym.owner.is(Flags.Trait))
         res += Generic(s"Cannot access field $sym on a partial object", pos)
     }
 
@@ -187,18 +184,19 @@ object PartialValue extends OpaqueValue {
   }
 
   /** assign to partial is always fine? */
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = Res()
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = Res()
 }
 
 object FilledValue extends OpaqueValue {
-  def select(sym: Symbol, heap: Heap, pos: Position): Res =
-    if (sym.is(Method)) {
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    val res = Res()
+    if (sym.is(Flags.Method)) {
       if (!sym.isPartial && !sym.isFilled)
         res += Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)
 
       Res(value = FullValue, effects = res.effects)
     }
-    else if (sym.is(Lazy)) {
+    else if (sym.is(Flags.Lazy)) {
       if (!sym.isPartial && !sym.isFilled)
         res += Generic(s"The lazy field $sym should be marked as `@partial` or `@filled` in order to be accessed", pos)
 
@@ -211,55 +209,56 @@ object FilledValue extends OpaqueValue {
       Res(effects = res.effects)
     }
     else {
-      Res(value = sym.info.value, effects = res.effects)
+      Res(value = sym.info.value)
     }
+  }
 
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res =
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res =
     if (value.widen(heap, pos) < sym.info.value)
       Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", pos)))
-    Res()
+    else Res()
 }
 
 
 /** A function value or value of method select */
 case class FunctionValue(fun: (Int => Value, List[Position], Position, Heap) => Res) extends SingleValue {
-  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res =
+  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res =
     fun(values, argPos, pos, heap)
 
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = {
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     assert(sym.name.toString == "apply")
     Res(value = this)
   }
 
   /** not supported */
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = ???
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = ???
 }
 
 abstract class LazyValue extends Value {
   // not supported
-  def select(sym: Symbol, heap: Heap, pos: Position): Res = ???
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = ???
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = ???
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = ???
 }
 
 /** An object value */
 class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
   /** not supported, impossible to apply an object value */
-  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res = ???
+  def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
 
   // handle dynamic dispatch
-  private def resolve(sym: Symbol, tp: Type, open: Boolean): Symbol = {
-    if (sym.isClass || sym.isConstructor || sym.isEffectivelyFinal || sym.is(Private)) sym
+  private def resolve(sym: Symbol, tp: Type, open: Boolean)(implicit ctx: Context): Symbol = {
+    if (sym.isClass || sym.isConstructor || sym.isEffectivelyFinal || sym.is(Flags.Private)) sym
     else sym.matchingMember(tp)
   }
 
-  def select(sym: Symbol, heap: Heap, pos: Position, env: Env): Res = {
-    val obj = heap(id).asInstanceOf[ObjectRep]
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    val obj = heap(id).asObj
     val target = resolve(sym, obj.tp, obj.open)
-    if (env.contains(target)) {
+    if (obj.contains(target)) {
       val value = obj(target)
-      if (target.is(Lazy)) {
+      if (target.is(Flags.Lazy)) {
         if (value.isInstanceOf[LazyValue]) {
           val res = value(Nil, Nil, Nil, pos, obj.heap)
           obj(target) = res.value
@@ -269,17 +268,17 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
         }
         else Res(value = value)
       }
-      else if (target.is(Method)) {
+      else if (target.is(Flags.Method)) {
         val res =
           if (target.info.isInstanceOf[ExprType]) {       // parameter-less call
-            val res2 = value(Nil, Nil, Nil, pos, env.heap)
+            val res2 = value(Nil, Nil, Nil, pos, obj.heap)
 
             if (res2.effects.nonEmpty)
               res2.effects = Vector(Call(target, res2.effects, pos))
 
             res2
           }
-          else Res(value = Value)
+          else Res(value = value)
 
         if (obj.open && !target.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
           res += OverrideRisk(sym, pos)
@@ -292,22 +291,22 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
 
         val res = Res(effects = effs, value = value)
 
-        if (target.is(Deferred) && !target.hasAnnotation(defn.InitAnnot))
+        if (target.is(Flags.Deferred) && !target.hasAnnotation(defn.InitAnnot))
           res += UseAbstractDef(target, pos)
 
         res
       }
     }
-    else if (this.classInfos.contains(target)) Res()
+    else if (target.isClass && obj.classInfos.contains(target.asClass)) Res()
     else {
       // two cases: (1) select on unknown super; (2) select on self annotation
-      if (obj.tp.classSymbol.isSubClass(target.owner)) FilledValue.select(target, heap, pos, env)
-      else PartialValue.select(target, heap, pos, env)
+      if (obj.tp.classSymbol.isSubClass(target.owner)) FilledValue.select(target, heap, pos)
+      else PartialValue.select(target, heap, pos)
     }
   }
 
-  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position): Res = {
-    val obj = heap(id).asInstanceOf[ObjectRep]
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    val obj = heap(id).asObj
     val target = resolve(sym, obj.tp, obj.open)
     if (obj.contains(target)) {
       obj(target) = value
@@ -320,11 +319,11 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
     }
   }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep): Set[ObjectRep] = {
-    val outer = obj.heap(id).asInstanceOf[ObjectRep]
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = {
+    val outer = obj.heap(id).asObj
     if (outer.classInfos.contains(cls)) {
       val (tmpl, envId) = outer.classInfos(cls)
-      val envOuter = outer.heap(envId)
+      val envOuter = outer.heap(envId).asEnv
       Indexing.indexClass(cls, tmpl, obj, envOuter)
     }
     else {
@@ -338,7 +337,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
   override def hashCode = id
 
   override def equals(that: Any) = that match {
-    case that: AtomObjectValue => that.id == id
+    case that: ObjectValue => that.id == id
     case _ => false
   }
 }
