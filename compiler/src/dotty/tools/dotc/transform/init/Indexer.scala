@@ -24,7 +24,9 @@ import Constants.Constant
 import collection.mutable
 
 
-object Indexing {
+trait Indexer { self: Analyzer =>
+  import tpd._
+
   def methodValue(ddef: DefDef, env: Env)(implicit ctx: Context): FunctionValue =
     FunctionValue { (args, argPos, pos, heap) =>
       if (isChecking(ddef.symbol)) {
@@ -43,7 +45,7 @@ object Indexing {
       }
     }
 
-  def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): FunctionValue =
+  def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): LazyValue =
     new LazyValue {
       def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap): Res =
         if (isChecking(vdef.symbol)) {
@@ -52,12 +54,13 @@ object Indexing {
           Res()
         }
         else {
-          val env2 = heap(env.id)
-          checking(vdef.symbol) { apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
+          val env2 = heap(env.id).asEnv
+          checking(vdef.symbol) { self.apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
         }
     }
 
-  def constructorValue(constr: DefDef, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue =
+  def constructorValue(cls: ClassSymbol, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue = {
+    val constr: DefDef = tmpl.constr
     FunctionValue { (args, argPos, pos, heap) =>
       if (isChecking(cls)) {
         debug(s"recursive creation of $cls found")
@@ -70,13 +73,14 @@ object Indexing {
         // setup constructor params
         constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
           val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-          if (sym.exists) objCurrent.add(sym, values(index))
-          innerClsEnv.add(param.symbol, values(index))
+          if (sym.exists) objCurrent.add(sym, args(index))
+          innerClsEnv.add(param.symbol, args(index))
         }
 
         checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
       }
     }
+  }
 
   def unknownConstructorValue(cls: ClassSymbol)(implicit ctx: Context): Value =
     FunctionValue {
@@ -95,7 +99,7 @@ object Indexing {
       env.add(vdef.symbol, NoValue)
     case tdef: TypeDef if tdef.isClassDef  =>
       // class has to be handled differently because of inheritance
-      env.add(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template])
+      env.addClassDef(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template])
     case _ =>
   }
 
@@ -112,7 +116,7 @@ object Indexing {
       obj.add(vdef.symbol, NoValue)
     case tdef: TypeDef if tdef.isClassDef  =>
       // class has to be handled differently because of inheritance
-      obj.add(tdef.symbol, tdef.rhs.asInstanceOf[Template] -> env.id)
+      obj.add(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template] -> env.id)
     case _ =>
   }
 
@@ -120,10 +124,10 @@ object Indexing {
     val innerClsEnv = env.fresh()
 
     // don't go recursively for parents as indexing is based on linearization
-    indexMembers(tmpl.body, innerClsEnv, inner)
+    indexMembers(tmpl.body, innerClsEnv, obj)
 
     // index primary constructor
-    val value = constructorValue(tmpl.constr, innerClsEnv, obj)
+    val value = constructorValue(cls, tmpl, innerClsEnv, obj)
     obj.add(tmpl.constr.symbol, value)
 
     // setup this

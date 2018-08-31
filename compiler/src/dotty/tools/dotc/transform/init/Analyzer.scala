@@ -24,7 +24,7 @@ import Constants.Constant
 import collection.mutable
 
 
-class Analyzer {
+class Analyzer extends Indexer {
   import tpd._
 
   var depth: Int = 0

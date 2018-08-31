@@ -7,7 +7,7 @@ import Contexts.Context
 import StdNames._
 import Names._
 import ast._
-import Trees._
+import tpd._
 import Symbols._
 import Types._
 import Decorators._
@@ -39,7 +39,8 @@ object Heap {
   class RootEnv extends Env(-1) {
     override def contains(sym: Symbol): Boolean = _syms.contains(sym)
 
-    override def containsClass(sym: Symbol): Boolean = _symtab.contains(sym)
+    override def containsClass(cls: ClassSymbol): Boolean =
+      _classInfos.contains(cls)
   }
 
   def createRootEnv: Env = {
@@ -120,9 +121,14 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   protected var _syms: Map[Symbol, Value] = Map()
 
   /** local class definitions */
-  private var _classInfos: Map[ClassSymbol, Template] = List()
-  def add(cls: ClassSymbol, tmpl: Template) = _classInfos(cls) = tmpl
-  def classInfos: Map[ClassSymbol, Template] = _classInfos
+  protected var _classInfos: Map[ClassSymbol, Template] = Map()
+  def addClassDef(cls: ClassSymbol, tmpl: Template) =
+    _classInfos = _classInfos.updated(cls, tmpl)
+  def containsClass(cls: ClassSymbol): Boolean =
+    _classInfos.contains(cls) || outer.containsClass(cls)
+  def getClassDef(cls: ClassSymbol): Template =
+    if (_classInfos.contains(cls)) _classInfos(cls)
+    else outer.getClassDef(cls)
 
   def outer: Env = heap(outerId).asInstanceOf[Env]
 
@@ -156,8 +162,8 @@ class Env(outerId: Int) extends HeapEntry with Scope {
 
   def contains(sym: Symbol): Boolean = _syms.contains(sym) || outer.contains(sym)
 
-  def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
-  def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
+  def notAssigned = _syms.keys.filter(sym => _syms(sym) == NoValue)
+  def notForcedSyms  = _syms.keys.filter(sym => _syms(sym).isInstanceOf[LazyValue])
 
   def join(env2: Env): Env = {
     assert(this.id == env2.id)
@@ -177,7 +183,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
       this(sym) = value
       Res()
     }
-    else if (value.widen != FullValue) // leak assign
+    else if (value.widen(this.heap, pos) != FullValue) // leak assign
       Res(effects = Vector(Generic("Cannot leak an object under initialization", pos)))
     else Res()
 
@@ -186,7 +192,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
   def select(sym: Symbol, pos: Position)(implicit ctx: Context): Res =
     if (this.contains(sym)) {
       val value = this(sym)
-      if (sym.is(Lazy)) {
+      if (sym.is(Flags.Lazy)) {
         if (value.isInstanceOf[LazyValue]) {
           val res = value(Nil, Nil, Nil, pos, this.heap)
           this(sym) = res.value
@@ -196,7 +202,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
         }
         else Res(value = value)
       }
-      else if (sym.is(Method)) {
+      else if (sym.is(Flags.Method)) {
         if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
           val res2 = value(Nil, Nil, Nil, pos, this.heap)
 
@@ -213,7 +219,7 @@ class Env(outerId: Int) extends HeapEntry with Scope {
         else Res(value = value)
       }
     }
-    else if (this.classInfos.contains(sym)) Res()
+    else if (sym.isClass && this.containsClass(sym.asClass)) Res()
     else {
       // How do we know the class/method/field does not capture/use a partial/filled outer?
       // If method/field exist, then the outer class beyond the method/field is full,
@@ -221,13 +227,13 @@ class Env(outerId: Int) extends HeapEntry with Scope {
       Res()
     }
 
-  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep)(implicit ctx: Context): Set[ObjectRep] = {
-    if (this.classInfos.contains(cls)) {
-      val tmpl = this.classInfos(cls)
-      Indexing.indexClass(cls, tmpl, obj, this)
+  def index(cls: ClassSymbol, tp: Type, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = {
+    if (this.containsClass(cls)) {
+      val tmpl = this.getClassDef(cls)
+      indexer.indexClass(cls, tmpl, obj, this)
     }
     else {
-      val value = Indexing.unknownConstructorValue(cls)
+      val value = indexer.unknownConstructorValue(cls)
       obj.add(cls.primaryConstructor, value)
     }
 
@@ -236,10 +242,10 @@ class Env(outerId: Int) extends HeapEntry with Scope {
 
   override def toString: String =
     (if (outerId > 0) outer.toString + "\n" else "") ++
-    s"""~ --------------${getClass} - $id($outerId)-----------------------
+    s"""~ -------------- $id($outerId) ---------------------
         ~ | locals:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
-        ~ | lazy forced:  ${forcedSyms}"""
+        ~ | lazy not forced:  ${notForcedSyms}"""
     .stripMargin('~')
 }
 
@@ -257,8 +263,8 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
   }
 
   /** inner class definitions */
-  private var _classInfos: Map[ClassSymbol, (Template, Int)] = List()
-  def add(cls: ClassSymbol, info: (Template, Int)) = _classInfos(cls) = info
+  private var _classInfos: Map[ClassSymbol, (Template, Int)] = Map()
+  def add(cls: ClassSymbol, info: (Template, Int)) = _classInfos = _classInfos.updated(cls, info)
   def classInfos: Map[ClassSymbol, (Template, Int)] = _classInfos
 
   /** methods and fields of the object */
@@ -279,8 +285,8 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
   def contains(sym: Symbol): Boolean =
     _syms.contains(sym)
 
-  def notAssigned = _syms.keys.filter(sym => !(_syms(sym).assigned))
-  def forcedSyms  = _syms.keys.filter(sym => _syms(sym).forced)
+  def notAssigned = _syms.keys.filter(sym => _syms(sym) == NoValue)
+  def notForcedSyms  = _syms.keys.filter(sym => _syms(sym).isInstanceOf[LazyValue])
 
   // Invariant: two objects with the same id always have the same `classInfos`,
   //            thus they can be safely ignored in `join`.
@@ -302,10 +308,10 @@ class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with C
   }
 
   override def toString: String =
-    s"""~ --------------${getClass} - $id($envId)-----------------------
+    s"""~ --------------${id}---------------------
         ~ | fields:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
-        ~ | lazy forced:  ${forcedSyms}
+        ~ | lazy not forced:  ${notForcedSyms}
         ~ | class: $tp"""
     .stripMargin('~')
 }
