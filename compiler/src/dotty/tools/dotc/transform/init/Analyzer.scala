@@ -55,7 +55,6 @@ class Analyzer extends Indexer {
     if (funRes.hasErrors) return Res(effects = funRes.effects)
 
     val args = argss.flatten
-    val paramInfos = fun.tpe.widen.paramInfoss.flatten
 
     // check params
     var effs = Vector.empty[Effect]
@@ -69,7 +68,7 @@ class Analyzer extends Indexer {
     if (effs.size > 0) return Res(effects = effs)
 
     indentedDebug(s">>> calling $funSym")
-    val res = funRes.value(values, paramInfos, args.map(_.pos), tree.pos, env.heap)
+    val res = funRes.value(values, args.map(_.pos), tree.pos, env.heap)
     if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
     res
   }
@@ -218,7 +217,6 @@ class Analyzer extends Indexer {
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val cls = tref.classSymbol.asClass
     val args = argss.flatten
-    val paramInfos = cls.primaryConstructor.info.paramInfoss.flatten
 
     // setup constructor params
     var effs = Vector.empty[Effect]
@@ -250,7 +248,7 @@ class Analyzer extends Indexer {
     }
 
     val objValues = objs.map { obj =>
-      val res = obj(init.symbol).apply(argValues, paramInfos, args.map(_.pos), tree.pos, obj.heap)
+      val res = obj(init.symbol).apply(argValues, args.map(_.pos), tree.pos, obj.heap)
       // reduce number of errors
       if (res.hasErrors) return Res(effects = res.effects)
 
@@ -270,7 +268,6 @@ class Analyzer extends Indexer {
    */
   def checkParent(init: Symbol, argss: List[List[Tree]], env: Env, obj: ObjectRep, pos: Position)(implicit ctx: Context): Res = {
     val args = argss.flatten
-    val paramInfos = init.info.paramInfoss.flatten
 
     // setup constructor params
     var effs = Vector.empty[Effect]
@@ -282,7 +279,7 @@ class Analyzer extends Indexer {
 
     if (effs.nonEmpty) return Res(effs)
 
-    obj(init).apply(argValues, paramInfos, args.map(_.pos), pos, obj.heap)
+    obj(init).apply(argValues, args.map(_.pos), pos, obj.heap)
   }
 
   object NewEx {

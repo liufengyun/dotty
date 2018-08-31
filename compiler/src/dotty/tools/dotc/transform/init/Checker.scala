@@ -156,9 +156,8 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     // init object
     val constr = tmpl.constr
     val values = constr.vparamss.flatten.map { param => param.symbol.value }
-    val tps = tmpl.parents.map(_.tpe)
-    val poss = tmpl.parents.map(_.pos)
-    val res = obj(constr.symbol).apply(values, tps, poss, cls.pos, obj.heap)
+    val poss = constr.vparamss.flatten.map(_.pos)
+    val res = obj(constr.symbol).apply(values, poss, cls.pos, obj.heap)
 
     res.effects.foreach(_.report)
     obj.notAssigned.foreach { sym =>

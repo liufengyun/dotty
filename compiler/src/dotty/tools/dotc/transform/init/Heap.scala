@@ -194,7 +194,7 @@ class Env(outerId: Int) extends HeapEntry {
       val value = this(sym)
       if (sym.is(Flags.Lazy)) {
         if (value.isInstanceOf[LazyValue]) {
-          val res = value(Nil, Nil, Nil, pos, this.heap)
+          val res = value(Nil, Nil, pos, this.heap)
           this(sym) = res.value
 
           if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
@@ -204,7 +204,7 @@ class Env(outerId: Int) extends HeapEntry {
       }
       else if (sym.is(Flags.Method)) {
         if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
-          val res2 = value(Nil, Nil, Nil, pos, this.heap)
+          val res2 = value(Nil, Nil, pos, this.heap)
 
           if (res2.effects.nonEmpty)
             res2.effects = Vector(Call(sym, res2.effects, pos))
@@ -233,7 +233,7 @@ class Env(outerId: Int) extends HeapEntry {
       indexer.indexClass(cls, tmpl, obj, this)
     }
     else {
-      val value = indexer.unknownConstructorValue(cls)
+      val value = Value.defaultFunctionValue(cls.primaryConstructor)
       obj.add(cls.primaryConstructor, value)
     }
 

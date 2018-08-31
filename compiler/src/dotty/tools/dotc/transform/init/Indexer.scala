@@ -28,26 +28,27 @@ trait Indexer { self: Analyzer =>
   import tpd._
 
   def methodValue(ddef: DefDef, env: Env)(implicit ctx: Context): FunctionValue =
-    FunctionValue { (args, argPos, pos, heap) =>
-      if (isChecking(ddef.symbol)) {
-        // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
-        debug(s"recursive call of ${ddef.symbol} found")
-        Res()
-      }
-      else {
-        val env2 = env.fresh(heap)
-
-        ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-          env2.add(param.symbol, value = args(index))
+    new FunctionValue {
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res =
+        if (isChecking(ddef.symbol)) {
+          // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
+          debug(s"recursive call of ${ddef.symbol} found")
+          Res()
         }
+        else {
+          val env2 = env.fresh(heap)
 
-        checking(ddef.symbol) { apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
-      }
+          ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+            env2.add(param.symbol, value = values(index))
+          }
+
+          checking(ddef.symbol) { self.apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
+        }
     }
 
   def lazyValue(vdef: ValDef, env: Env)(implicit ctx: Context): LazyValue =
     new LazyValue {
-      def apply(values: Int => Value, paramTps: List[Type], argPos: List[Position], pos: Position, heap: Heap)(implicit ctx: Context): Res =
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res =
         if (isChecking(vdef.symbol)) {
           // TODO: check if fixed point has reached. But the domain is infinite, thus non-terminating.
           debug(s"recursive call of ${vdef.symbol} found")
@@ -61,33 +62,27 @@ trait Indexer { self: Analyzer =>
 
   def constructorValue(cls: ClassSymbol, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue = {
     val constr: DefDef = tmpl.constr
-    FunctionValue { (args, argPos, pos, heap) =>
-      if (isChecking(cls)) {
-        debug(s"recursive creation of $cls found")
-        Res()
-      }
-      else checking(cls) {
-        val innerClsEnv = heap(env.id).asInstanceOf[Env]
-        val objCurrent = heap(obj.id).asInstanceOf[ObjectRep]
-
-        // setup constructor params
-        constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-          val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-          if (sym.exists) objCurrent.add(sym, args(index))
-          innerClsEnv.add(param.symbol, args(index))
+    new FunctionValue {
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res =
+        if (isChecking(cls)) {
+          debug(s"recursive creation of $cls found")
+          Res()
         }
+        else checking(cls) {
+          val innerClsEnv = heap(env.id).asInstanceOf[Env]
+          val objCurrent = heap(obj.id).asInstanceOf[ObjectRep]
 
-        checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
-      }
+          // setup constructor params
+          constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+            val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
+            if (sym.exists) objCurrent.add(sym, values(index))
+            innerClsEnv.add(param.symbol, values(index))
+          }
+
+          checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
+        }
     }
   }
-
-  def unknownConstructorValue(cls: ClassSymbol)(implicit ctx: Context): Value =
-    FunctionValue {
-      (values: Int => Value, argPos: List[Position], pos: Position, heap: Heap) =>
-        val paramInfos = cls.primaryConstructor.info.paramInfoss.flatten
-        FilledValue.apply(values, paramInfos, argPos, pos, heap)
-    }
 
   /** Index local definitions */
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
