@@ -198,20 +198,22 @@ class Analyzer extends Indexer {
     val superCls = parents.head.tpe.classSymbol
     val remains = cls.baseClasses.tail.takeWhile(_ `ne` superCls).reverse
 
+    var resReturn = Res()
+
     // handle remaning traits
     remains.foreach { traitCls =>
       val parentOpt = parents.find(_.tpe.classSymbol `eq` traitCls)
       parentOpt match {
         case Some(parent @ NewEx(tref, init, argss)) =>
           val res = checkParent(init.symbol, argss, env, obj, parent.pos)
-          if (res.hasErrors) return res
+          resReturn = resReturn.join(res)
         case _ =>
           val res = checkParent(traitCls.primaryConstructor, Nil, env, obj, cls.pos)
-          if (res.hasErrors) return res
+          resReturn = resReturn.join(res)
       }
     }
 
-    Res()
+    resReturn
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
@@ -253,7 +255,9 @@ class Analyzer extends Indexer {
       // reduce number of errors
       if (res.hasErrors) return Res(effects = res.effects)
 
-      new ObjectValue(obj.id)
+      // an opaque object is subject to type checking
+      if (obj.isOpaque) res.value.asInstanceOf[OpaqueValue]
+      else new ObjectValue(obj.id)
     }
 
     if (objValues.size == 1) Res(value = objValues.head)

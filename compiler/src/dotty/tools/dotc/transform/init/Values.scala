@@ -28,6 +28,23 @@ object Value {
       }
     }
   }
+
+  def defaultConstructorValue(initSym: Symbol, obj: ObjectRep)(implicit ctx: Context): Value = {
+    new FunctionValue() {
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+        // an object can only be initialized once
+        obj.remove(initSym)
+
+        val paramInfos = initSym.info.paramInfoss.flatten
+        val res = checkParams(paramInfos, values, argPos, pos, heap)
+        if (res.hasErrors) return res
+
+        val args = (0 until paramInfos.size).map(values)
+        if (args.exists(_.widen(heap, pos) < FullValue)) Res(value = FilledValue)
+        else Res(value = FullValue)
+      }
+    }
+  }
 }
 
 /** Abstract values in analysis */
@@ -349,7 +366,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
       indexer.indexClass(cls, tmpl, obj, envOuter)
     }
     else {
-      val value = Value.defaultFunctionValue(cls.primaryConstructor)
+      val value = Value.defaultConstructorValue(cls.primaryConstructor, obj)
       obj.add(cls.primaryConstructor, value)
     }
 

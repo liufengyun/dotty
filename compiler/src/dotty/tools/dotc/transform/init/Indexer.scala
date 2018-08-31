@@ -63,7 +63,7 @@ trait Indexer { self: Analyzer =>
   def constructorValue(cls: ClassSymbol, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue = {
     val constr: DefDef = tmpl.constr
     new FunctionValue {
-      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res =
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
         if (isChecking(cls)) {
           debug(s"recursive creation of $cls found")
           Res()
@@ -71,6 +71,9 @@ trait Indexer { self: Analyzer =>
         else checking(cls) {
           val innerClsEnv = heap(env.id).asInstanceOf[Env]
           val objCurrent = heap(obj.id).asInstanceOf[ObjectRep]
+
+          // an object can only be initialized once
+          objCurrent.remove(constr.symbol)
 
           // setup constructor params
           constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
@@ -81,6 +84,7 @@ trait Indexer { self: Analyzer =>
 
           checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
         }
+      }
     }
   }
 

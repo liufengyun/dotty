@@ -233,7 +233,7 @@ class Env(outerId: Int) extends HeapEntry {
       indexer.indexClass(cls, tmpl, obj, this)
     }
     else {
-      val value = Value.defaultFunctionValue(cls.primaryConstructor)
+      val value = Value.defaultConstructorValue(cls.primaryConstructor, obj)
       obj.add(cls.primaryConstructor, value)
     }
 
@@ -275,6 +275,11 @@ class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = fals
 
   def add(sym: Symbol, value: Value) =
     _syms = _syms.updated(sym, value)
+
+  def remove(sym: Symbol) =
+    _syms = _syms - sym
+
+  def isOpaque: Boolean = _syms.isEmpty
 
   // object environment should not resolve outer
   def update(sym: Symbol, value: Value): Unit = {
