@@ -251,7 +251,7 @@ class Env(outerId: Int) extends HeapEntry {
 
 /** A container holds all information about fields of an object and outers of nested classes
  */
-class ObjectRep(val tp: Type, val open: Boolean = true) extends HeapEntry with Cloneable {
+class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = false) extends HeapEntry with Cloneable {
   override def clone: ObjectRep = super.clone.asInstanceOf[ObjectRep]
 
   def fresh: ObjectRep = {

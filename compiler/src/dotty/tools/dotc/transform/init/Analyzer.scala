@@ -249,6 +249,7 @@ class Analyzer extends Indexer {
 
     val objValues = objs.map { obj =>
       val res = obj(init.symbol).apply(argValues, args.map(_.pos), tree.pos, obj.heap)
+      obj.init = true
       // reduce number of errors
       if (res.hasErrors) return Res(effects = res.effects)
 

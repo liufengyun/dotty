@@ -76,8 +76,10 @@ sealed trait Value {
         val res = fv(i => FullValue, i => NoPosition, pos, testHeap)
         if (res.hasErrors) FilledValue
         else recur(res.value)
-      case obj: ObjectValue =>
-        FilledValue
+      case ov: ObjectValue =>
+        val obj = heap(ov.id).asObj
+        if (obj.init) FilledValue
+        else PartialValue
       case UnionValue(vs) =>
         vs.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           if (v == PartialValue) return PartialValue
