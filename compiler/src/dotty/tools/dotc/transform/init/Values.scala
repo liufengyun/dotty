@@ -29,7 +29,7 @@ object Value {
     }
   }
 
-  def defaultConstructorValue(initSym: Symbol, obj: ObjectRep)(implicit ctx: Context): Value = {
+  def defaultConstructorValue(initSym: Symbol, obj: ObjectRep, prefixFull: Boolean = true)(implicit ctx: Context): Value = {
     new FunctionValue() {
       def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
         // an object can only be initialized once
@@ -40,7 +40,7 @@ object Value {
         if (res.hasErrors) return res
 
         val args = (0 until paramInfos.size).map(values)
-        if (args.exists(_.widen(heap, pos) < FullValue)) Res(value = FilledValue)
+        if (!prefixFull || args.exists(_.widen(heap, pos) < FullValue)) Res(value = FilledValue)
         else Res(value = FullValue)
       }
     }
@@ -56,7 +56,7 @@ sealed trait Value {
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res
 
   /** Index an inner class with current value as the immediate outer */
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep]
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res
 
   /** Apply a method or function to the provided arguments */
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res
@@ -115,7 +115,7 @@ object NoValue extends Value {
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = ???
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
 }
 
 /** A single value, instead of a union value */
@@ -141,11 +141,11 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
     }
   }
 
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = {
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     var used = false
-    values.flatMap { value =>
+    values.foldLeft(Res()) { (acc, value) =>
       val obj2 = if (used) obj.fresh else { used = true; obj }
-      value.index(cls, obj2, indexer)
+      value.init(cls, args, argPos, pos, obj2, indexer).join(acc)
     }
   }
 
@@ -157,8 +157,6 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
 abstract sealed class OpaqueValue extends SingleValue {
   // not supported
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
-
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = Set(obj)
 
   def <(that: OpaqueValue): Boolean = (this, that) match {
     case (FullValue, _) => false
@@ -183,6 +181,12 @@ object FullValue extends OpaqueValue {
     if (value.widen(heap, pos) != FullValue)
       Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
     else Res()
+
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val value = Value.defaultConstructorValue(cls.primaryConstructor, obj)
+    obj.add(cls.primaryConstructor, value)
+    Set(obj)
+  }
 }
 
 object PartialValue extends OpaqueValue {
@@ -214,6 +218,12 @@ object PartialValue extends OpaqueValue {
 
   /** assign to partial is always fine? */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = Res()
+
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val value = Value.defaultConstructorValue(cls.primaryConstructor, obj, prefixFull = false)
+    obj.add(cls.primaryConstructor, value)
+    Set(obj)
+  }
 }
 
 object FilledValue extends OpaqueValue {
@@ -246,6 +256,12 @@ object FilledValue extends OpaqueValue {
     if (value.widen(heap, pos) < sym.info.value)
       Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", pos)))
     else Res()
+
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val value = Value.defaultConstructorValue(cls.primaryConstructor, obj, prefixFull = false)
+    obj.add(cls.primaryConstructor, value)
+    Set(obj)
+  }
 }
 
 /** A function value or value of method select */
@@ -270,7 +286,7 @@ abstract class FunctionValue extends SingleValue {
 
   /** not supported */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = ???
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
 }
 
 /** A lazy value */
@@ -278,7 +294,7 @@ abstract class LazyValue extends Value {
   // not supported
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = ???
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
 }
 
 /** An object value */
@@ -358,7 +374,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
     }
   }
 
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = {
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     val outer = obj.heap(id).asObj
     if (outer.classInfos.contains(cls)) {
       val (tmpl, envId) = outer.classInfos(cls)

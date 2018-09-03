@@ -82,7 +82,8 @@ trait Indexer { self: Analyzer =>
             innerClsEnv.add(param.symbol, values(index))
           }
 
-          checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
+          val res = checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
+          res.copy(value = new ObjectValue(obj.id))
         }
       }
     }

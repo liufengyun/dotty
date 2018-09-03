@@ -207,6 +207,7 @@ class Analyzer extends Indexer {
         case Some(parent @ NewEx(tref, init, argss)) =>
           val res = checkParent(init.symbol, argss, env, obj, parent.pos)
           resReturn = resReturn.join(res)
+        case Some(parent) =>
         case _ =>
           val res = checkParent(traitCls.primaryConstructor, Nil, env, obj, cls.pos)
           resReturn = resReturn.join(res)
@@ -216,9 +217,23 @@ class Analyzer extends Indexer {
     resReturn
   }
 
+  def checkClassSelect(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp.dealias match {
+    case AppliedType(constrTp, args) =>
+      checkClassSelect(constrTp, env, pos)
+    case tp @ TypeRef(NoPrefix, _) =>
+      env.select(tp.classSymbol, pos)
+    case tref: TypeRef =>
+      val prefixRes = checkRef(tref.prefix)
+      if (prefixRes.hasErrors) prefixRes
+      else prefixRes.select(tref.classSymbol, pos)
+  }
+
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val cls = tref.classSymbol.asClass
     val args = argss.flatten
+
+    val resSelect = checkClassSelect(tref, env, tree.pos)
+    if (resSelect.hasErrors) return resSelect
 
     // setup constructor params
     var effs = Vector.empty[Effect]
@@ -237,31 +252,13 @@ class Analyzer extends Indexer {
       case tp: TypeRef => tp.prefix
     }
 
-    // index class environments
-    val objs = cls.baseClasses.flatMap { parent =>
-      val baseType = tree.tpe.baseType(parent)
-      val prefix = toPrefix(baseType)
-        if (prefix == NoPrefix) env.index(cls, obj, this)
-        else {
-          val prefixRes = checkRef(prefix, env, parent.pos)
-          if (prefixRes.hasErrors) return prefixRes
-          prefixRes.value.index(cls, obj, this)
-        }
+    val prefix = toPrefix(tref)
+    if (prefix == NoPrefix) env.init(cls, argValues, args.map(_.pos), tree.pos, obj, this)
+    else {
+      val prefixRes = checkRef(prefix, env, tree.pos)
+      if (prefixRes.hasErrors) return prefixRes
+      prefixRes.value.index(cls, argValues, args.map(_.pos), tree.pos, obj, this)
     }
-
-    val objValues = objs.map { obj =>
-      val res = obj(init.symbol).apply(argValues, args.map(_.pos), tree.pos, obj.heap)
-      obj.init = true
-      // reduce number of errors
-      if (res.hasErrors) return Res(effects = res.effects)
-
-      // an opaque object is subject to type checking
-      if (obj.isOpaque) res.value.asInstanceOf[OpaqueValue]
-      else new ObjectValue(obj.id)
-    }
-
-    if (objValues.size == 1) Res(value = objValues.head)
-    else Res(value = new UnionValue(objValues.toSet))
   }
 
   /** Check a parent call

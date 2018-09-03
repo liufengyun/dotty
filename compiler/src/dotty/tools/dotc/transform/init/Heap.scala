@@ -227,7 +227,7 @@ class Env(outerId: Int) extends HeapEntry {
       Res()
     }
 
-  def index(cls: ClassSymbol, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Set[ObjectRep] = {
+  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     if (this.containsClass(cls)) {
       val tmpl = this.getClassDef(cls)
       indexer.indexClass(cls, tmpl, obj, this)
@@ -278,8 +278,6 @@ class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = fals
 
   def remove(sym: Symbol) =
     _syms = _syms - sym
-
-  def isOpaque: Boolean = _syms.isEmpty
 
   // object environment should not resolve outer
   def update(sym: Symbol, value: Value): Unit = {
