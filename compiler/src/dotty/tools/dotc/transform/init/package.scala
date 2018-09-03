@@ -38,6 +38,8 @@ package object init {
 
     def isPrimaryConstructorFields(implicit ctx: Context) = sym.is(ParamAccessor)
 
+    def isDefinedOn(tp: Type): Boolean =
+      tp.classSymbol.isSubClass(sym.owner)
 
     def value(implicit ctx: Context) =
       if (isPartial) PartialValue

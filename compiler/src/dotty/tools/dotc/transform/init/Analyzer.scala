@@ -188,52 +188,34 @@ class Analyzer extends Indexer {
   def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Res = {
     if (cls.is(Trait)) return Res()
 
+    val res = Res()
+
     // first call super class, see spec 5.1 about "Template Evaluation".
-    parents.head match {
+    val res = parents.head match {
       case parent @ NewEx(tref, init, argss) =>
-        val res = checkParent(init.symbol, argss, env, obj, parent.pos)
-        if (res.hasErrors) return res
+        checkParent(init.symbol, argss, env, obj, parent.pos)
     }
+
+    if (res.hasErrors) return res.copy(value = FullValue)
 
     val superCls = parents.head.tpe.classSymbol
     val remains = cls.baseClasses.tail.takeWhile(_ `ne` superCls).reverse
 
-    var resReturn = Res()
-
     // handle remaning traits
-    remains.foreach { traitCls =>
+    remains.foldLeft(res) { (acc, traitCls) =>
       val parentOpt = parents.find(_.tpe.classSymbol `eq` traitCls)
       parentOpt match {
         case Some(parent @ NewEx(tref, init, argss)) =>
-          val res = checkParent(init.symbol, argss, env, obj, parent.pos)
-          resReturn = resReturn.join(res)
-        case Some(parent) =>
+          checkParent(init.symbol, argss, env, obj, parent.pos).join(acc)
         case _ =>
-          val res = checkParent(traitCls.primaryConstructor, Nil, env, obj, cls.pos)
-          resReturn = resReturn.join(res)
+          checkParent(traitCls.primaryConstructor, Nil, env, obj, cls.pos).join(acc)
       }
     }
-
-    resReturn
-  }
-
-  def checkClassSelect(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp.dealias match {
-    case AppliedType(constrTp, args) =>
-      checkClassSelect(constrTp, env, pos)
-    case tp @ TypeRef(NoPrefix, _) =>
-      env.select(tp.classSymbol, pos)
-    case tref: TypeRef =>
-      val prefixRes = checkRef(tref.prefix)
-      if (prefixRes.hasErrors) prefixRes
-      else prefixRes.select(tref.classSymbol, pos)
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val cls = tref.classSymbol.asClass
     val args = argss.flatten
-
-    val resSelect = checkClassSelect(tref, env, tree.pos)
-    if (resSelect.hasErrors) return resSelect
 
     // setup constructor params
     var effs = Vector.empty[Effect]
@@ -298,10 +280,6 @@ class Analyzer extends Indexer {
         Some((extract(tpt.tpe),  fn.tpe.asInstanceOf[TermRef], vargss))
       }
     }
-  }
-
-  def checkTemplate(cls: ClassSymbol, tp: Type, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context) = {
-    checkParents(cls, tmpl.parents, env, obj).join(checkStats(tmpl.body, env))
   }
 
   def apply(tree: Tree, env: Env)(implicit ctx: Context): Res = trace("checking " + tree.show, env)(tree match {

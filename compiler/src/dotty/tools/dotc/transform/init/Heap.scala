@@ -227,17 +227,12 @@ class Env(outerId: Int) extends HeapEntry {
       Res()
     }
 
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     if (this.containsClass(cls)) {
       val tmpl = this.getClassDef(cls)
-      indexer.indexClass(cls, tmpl, obj, this)
+      indexer.init(constr, tmpl, values, argPos, pos, obj, this)
     }
-    else {
-      val value = Value.defaultConstructorValue(cls.primaryConstructor, obj)
-      obj.add(cls.primaryConstructor, value)
-    }
-
-    Set(obj)
+    else FullValue.init(constr, values, argPos, pos, obj, indexer)
   }
 
   override def toString: String =

@@ -150,14 +150,11 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     root.addClassDef(cls, tmpl)
     indexOuter(cls, root)
 
-    // index object
-    root.index(cls, obj, analyzer)
-
     // init object
     val constr = tmpl.constr
     val values = constr.vparamss.flatten.map { param => param.symbol.value }
     val poss = constr.vparamss.flatten.map(_.pos)
-    val res = obj(constr.symbol).apply(values, poss, cls.pos, obj.heap)
+    val res = root.init(constr.symbol, values, poss, cls.pos, obj, analyzer)
 
     res.effects.foreach(_.report)
     obj.notAssigned.foreach { sym =>

@@ -20,28 +20,21 @@ import collection.mutable
 //=======================================
 
 object Value {
+  def checkParams(paramInfos: List[Type], values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+    paramInfos.zipWithIndex.foreach { case (tp, index: Int) =>
+      val value = values(index)
+      val pos = argPos(index)
+      if (value.widen(heap, pos) < tp.value)
+        return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
+    }
+    Res()
+  }
+
   def defaultFunctionValue(methSym: Symbol)(implicit ctx: Context): Value = {
     new FunctionValue() {
       def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
         val paramInfos = methSym.info.paramInfoss.flatten
         checkParams(paramInfos, values, argPos, pos, heap)
-      }
-    }
-  }
-
-  def defaultConstructorValue(initSym: Symbol, obj: ObjectRep, prefixFull: Boolean = true)(implicit ctx: Context): Value = {
-    new FunctionValue() {
-      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
-        // an object can only be initialized once
-        obj.remove(initSym)
-
-        val paramInfos = initSym.info.paramInfoss.flatten
-        val res = checkParams(paramInfos, values, argPos, pos, heap)
-        if (res.hasErrors) return res
-
-        val args = (0 until paramInfos.size).map(values)
-        if (!prefixFull || args.exists(_.widen(heap, pos) < FullValue)) Res(value = FilledValue)
-        else Res(value = FullValue)
       }
     }
   }
@@ -56,7 +49,7 @@ sealed trait Value {
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res
 
   /** Index an inner class with current value as the immediate outer */
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res
 
   /** Apply a method or function to the provided arguments */
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res
@@ -66,6 +59,8 @@ sealed trait Value {
    *  NoValue < Partial < Filled < Full
    */
   def join(other: Value): Value = (this, other) match {
+    case (FullValue, v) => v
+    case (v, FullValue) => v
     case (NoValue, _) => NoValue
     case (_, NoValue) => NoValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
@@ -115,7 +110,7 @@ object NoValue extends Value {
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
 }
 
 /** A single value, instead of a union value */
@@ -141,11 +136,11 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
     }
   }
 
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+  def init(constr: Symbol, args: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     var used = false
     values.foldLeft(Res()) { (acc, value) =>
       val obj2 = if (used) obj.fresh else { used = true; obj }
-      value.init(cls, args, argPos, pos, obj2, indexer).join(acc)
+      value.init(constr, args, argPos, pos, obj2, indexer).join(acc)
     }
   }
 
@@ -182,10 +177,14 @@ object FullValue extends OpaqueValue {
       Res(effects = Vector(Generic("Cannot assign an object under initialization to a full object", pos)))
     else Res()
 
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
-    val value = Value.defaultConstructorValue(cls.primaryConstructor, obj)
-    obj.add(cls.primaryConstructor, value)
-    Set(obj)
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val paramInfos = constr.info.paramInfoss.flatten
+    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    if (res.hasErrors) return res
+
+    val args = (0 until paramInfos.size).map(values)
+    if (args.exists(_.widen(heap, pos) < FullValue)) new ObjectValue(obj.id)
+    else Res(value = FullValue)
   }
 }
 
@@ -219,10 +218,19 @@ object PartialValue extends OpaqueValue {
   /** assign to partial is always fine? */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = Res()
 
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
-    val value = Value.defaultConstructorValue(cls.primaryConstructor, obj, prefixFull = false)
-    obj.add(cls.primaryConstructor, value)
-    Set(obj)
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val paramInfos = constr.info.paramInfoss.flatten
+    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    if (res.hasErrors) return res
+
+    val cls = constr.owner
+    if (!cls.isPartial) {
+      res += Generic(s"The nested $cls should be marked as `@partial` in order to be instantiated", pos)
+      res.value = FullValue
+      return res
+    }
+
+    Res(value = FilledValue)
   }
 }
 
@@ -241,10 +249,6 @@ object FilledValue extends OpaqueValue {
 
       res.value = sym.info.value
     }
-    else if (sym.isClass) {
-      if (!sym.isPartial && !sym.isFilled)
-        res += Generic(s"The nested $sym should be marked as `@partial` or `@filled` in order to be instantiated", pos)
-    }
     else {
       res.value = sym.info.value
     }
@@ -257,10 +261,19 @@ object FilledValue extends OpaqueValue {
       Res(effects = Vector(Generic("Cannot assign an object of a lower state to a field of higher state", pos)))
     else Res()
 
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
-    val value = Value.defaultConstructorValue(cls.primaryConstructor, obj, prefixFull = false)
-    obj.add(cls.primaryConstructor, value)
-    Set(obj)
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val paramInfos = constr.info.paramInfoss.flatten
+    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    if (res.hasErrors) return res
+
+    val cls = constr.owner
+    if (!cls.isPartial && !cls.isFilled) {
+      res += Generic(s"The nested $sym should be marked as `@partial` or `@filled` in order to be instantiated", pos)
+      res.value = FullValue
+      return res
+    }
+
+    Res(value = FilledValue)
   }
 }
 
@@ -273,20 +286,9 @@ abstract class FunctionValue extends SingleValue {
     Res(value = this)
   }
 
-  def checkParams(paramInfos: List[Type], values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
-    paramInfos.zipWithIndex.foreach { case (tp, index: Int) =>
-      val value = values(index)
-      val pos = argPos(index)
-      if (value.widen(heap, pos) < tp.value)
-        return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
-    }
-    Res()
-  }
-
-
   /** not supported */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
 }
 
 /** A lazy value */
@@ -294,7 +296,7 @@ abstract class LazyValue extends Value {
   // not supported
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = ???
 }
 
 /** An object value */
@@ -352,10 +354,9 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
         res
       }
     }
-    else if (target.isClass && obj.classInfos.contains(target.asClass)) Res()
     else {
       // two cases: (1) select on unknown super; (2) select on self annotation
-      if (obj.tp.classSymbol.isSubClass(target.owner)) FilledValue.select(target, heap, pos)
+      if (target.isDefinedOn(obj.tp)) FilledValue.select(target, heap, pos)
       else PartialValue.select(target, heap, pos)
     }
   }
@@ -369,24 +370,23 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
     }
     else {
       // two cases: (1) select on unknown super; (2) select on self annotation
-      if (obj.tp.classSymbol.isSubClass(target.owner)) FilledValue.assign(target, value, heap, pos)
+      if (target.isDefinedOn(obj.tp)) FilledValue.assign(target, value, heap, pos)
       else PartialValue.assign(target, value, heap, pos)
     }
   }
 
-  def init(cls: ClassSymbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+    val cls = constr.owner.asClass
     val outer = obj.heap(id).asObj
     if (outer.classInfos.contains(cls)) {
       val (tmpl, envId) = outer.classInfos(cls)
       val envOuter = outer.heap(envId).asEnv
-      indexer.indexClass(cls, tmpl, obj, envOuter)
+      indexer.init(constr, tmpl, values, argPos, pos, obj, envOuter)
     }
     else {
-      val value = Value.defaultConstructorValue(cls.primaryConstructor, obj)
-      obj.add(cls.primaryConstructor, value)
+      val value = if (target.isDefinedOn(obj.tp)) FilledValue else PartialValue
+      value.init(constr, values, argPos, pos, obj, indexer)
     }
-
-    Set(obj)
   }
 
   override def hashCode = id

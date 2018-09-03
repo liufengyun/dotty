@@ -60,35 +60,6 @@ trait Indexer { self: Analyzer =>
         }
     }
 
-  def constructorValue(cls: ClassSymbol, tmpl: Template, env: Env, obj: ObjectRep)(implicit ctx: Context): FunctionValue = {
-    val constr: DefDef = tmpl.constr
-    new FunctionValue {
-      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
-        if (isChecking(cls)) {
-          debug(s"recursive creation of $cls found")
-          Res()
-        }
-        else checking(cls) {
-          val innerClsEnv = heap(env.id).asInstanceOf[Env]
-          val objCurrent = heap(obj.id).asInstanceOf[ObjectRep]
-
-          // an object can only be initialized once
-          objCurrent.remove(constr.symbol)
-
-          // setup constructor params
-          constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
-            val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-            if (sym.exists) objCurrent.add(sym, values(index))
-            innerClsEnv.add(param.symbol, values(index))
-          }
-
-          val res = checkTemplate(cls, obj.tp, tmpl, innerClsEnv, obj)
-          res.copy(value = new ObjectValue(obj.id))
-        }
-      }
-    }
-  }
-
   /** Index local definitions */
   def indexStats(stats: List[Tree], env: Env)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef if !ddef.symbol.isConstructor =>  // TODO: handle secondary constructor
@@ -120,18 +91,36 @@ trait Indexer { self: Analyzer =>
     case _ =>
   }
 
-  def indexClass(cls: ClassSymbol, tmpl: Template, obj: ObjectRep, env: Env)(implicit ctx: Context): Unit = {
-    val innerClsEnv = env.fresh()
+  def init(constr: Symbol, tmpl: Template, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, env: Env)(implicit ctx: Context): Unit = {
+    val cls = constr.owner.asClass
 
-    // don't go recursively for parents as indexing is based on linearization
-    indexMembers(tmpl.body, innerClsEnv, obj)
+    if (isChecking(cls)) {
+      debug(s"recursive creation of $cls found")
+      Res()
+    }
+    else checking(cls) {
+      val innerClsEnv = env.fresh()
 
-    // index primary constructor
-    val value = constructorValue(cls, tmpl, innerClsEnv, obj)
-    obj.add(tmpl.constr.symbol, value)
+      // first index current class
+      indexMembers(tmpl.body, innerClsEnv, obj)
 
-    // setup this
-    val self =  new ObjectValue(obj.id)
-    innerClsEnv.add(cls, self)
+      // propagate constructor arguments
+      constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+        val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
+        if (sym.exists) obj.add(sym, values(index))
+        innerClsEnv.add(param.symbol, values(index))
+      }
+
+      // call parent constructor
+      val res = checkParents(cls, tmpl.parents, innerClsEnv, obj)
+      if (res.hasErrors) return res.copy(value = FullValue)
+
+      // setup this
+      innerClsEnv.add(cls, res)
+
+      // check current class body
+      res ++= checkStats(tmpl.body, innerClsEnv).effects
+      res
+    }
   }
 }
