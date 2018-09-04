@@ -179,11 +179,11 @@ object FullValue extends OpaqueValue {
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     val paramInfos = constr.info.paramInfoss.flatten
-    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    val res = Value.checkParams(paramInfos, values, argPos, pos, obj.heap)
     if (res.hasErrors) return res
 
     val args = (0 until paramInfos.size).map(values)
-    if (args.exists(_.widen(heap, pos) < FullValue)) new ObjectValue(obj.id)
+    if (args.exists(_.widen(obj.heap, pos) < FullValue)) Res(value = new ObjectValue(obj.id))
     else Res(value = FullValue)
   }
 }
@@ -220,7 +220,7 @@ object PartialValue extends OpaqueValue {
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     val paramInfos = constr.info.paramInfoss.flatten
-    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    val res = Value.checkParams(paramInfos, values, argPos, pos, obj.heap)
     if (res.hasErrors) return res
 
     val cls = constr.owner
@@ -263,12 +263,12 @@ object FilledValue extends OpaqueValue {
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
     val paramInfos = constr.info.paramInfoss.flatten
-    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    val res = Value.checkParams(paramInfos, values, argPos, pos, obj.heap)
     if (res.hasErrors) return res
 
     val cls = constr.owner
     if (!cls.isPartial && !cls.isFilled) {
-      res += Generic(s"The nested $sym should be marked as `@partial` or `@filled` in order to be instantiated", pos)
+      res += Generic(s"The nested $cls should be marked as `@partial` or `@filled` in order to be instantiated", pos)
       res.value = FullValue
       return res
     }
@@ -384,7 +384,7 @@ class ObjectValue(val id: Int)(implicit ctx: Context) extends SingleValue {
       indexer.init(constr, tmpl, values, argPos, pos, obj, envOuter)
     }
     else {
-      val value = if (target.isDefinedOn(obj.tp)) FilledValue else PartialValue
+      val value = if (cls.isDefinedOn(obj.tp)) FilledValue else PartialValue
       value.init(constr, values, argPos, pos, obj, indexer)
     }
   }

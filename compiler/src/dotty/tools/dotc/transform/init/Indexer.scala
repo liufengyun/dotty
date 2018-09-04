@@ -91,7 +91,7 @@ trait Indexer { self: Analyzer =>
     case _ =>
   }
 
-  def init(constr: Symbol, tmpl: Template, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, env: Env)(implicit ctx: Context): Unit = {
+  def init(constr: Symbol, tmpl: Template, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, env: Env)(implicit ctx: Context): Res = {
     val cls = constr.owner.asClass
 
     if (isChecking(cls)) {
@@ -105,7 +105,7 @@ trait Indexer { self: Analyzer =>
       indexMembers(tmpl.body, innerClsEnv, obj)
 
       // propagate constructor arguments
-      constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+      tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
         val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
         if (sym.exists) obj.add(sym, values(index))
         innerClsEnv.add(param.symbol, values(index))
@@ -116,7 +116,7 @@ trait Indexer { self: Analyzer =>
       if (res.hasErrors) return res.copy(value = FullValue)
 
       // setup this
-      innerClsEnv.add(cls, res)
+      innerClsEnv.add(cls, res.value)
 
       // check current class body
       res ++= checkStats(tmpl.body, innerClsEnv).effects

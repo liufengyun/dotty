@@ -188,8 +188,6 @@ class Analyzer extends Indexer {
   def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Res = {
     if (cls.is(Trait)) return Res()
 
-    val res = Res()
-
     // first call super class, see spec 5.1 about "Template Evaluation".
     val res = parents.head match {
       case parent @ NewEx(tref, init, argss) =>
@@ -239,7 +237,7 @@ class Analyzer extends Indexer {
     else {
       val prefixRes = checkRef(prefix, env, tree.pos)
       if (prefixRes.hasErrors) return prefixRes
-      prefixRes.value.index(cls, argValues, args.map(_.pos), tree.pos, obj, this)
+      prefixRes.value.init(cls, argValues, args.map(_.pos), tree.pos, obj, this)
     }
   }
 

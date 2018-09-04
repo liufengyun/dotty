@@ -38,7 +38,7 @@ package object init {
 
     def isPrimaryConstructorFields(implicit ctx: Context) = sym.is(ParamAccessor)
 
-    def isDefinedOn(tp: Type): Boolean =
+    def isDefinedOn(tp: Type)(implicit ctx: Context): Boolean =
       tp.classSymbol.isSubClass(sym.owner)
 
     def value(implicit ctx: Context) =
