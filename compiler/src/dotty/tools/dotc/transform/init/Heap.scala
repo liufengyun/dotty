@@ -262,6 +262,8 @@ class SliceRep(val tp: Type, innerEnvId: Int) extends HeapEntry with Cloneable {
   /** methods and fields of the slice */
   private var _syms: Map[Symbol, Value] = Map()
 
+  def symbols: Map[Symbol, Value] = _syms
+
   def apply(sym: Symbol): Value =
     _syms(sym)
 

@@ -63,6 +63,8 @@ sealed trait Value {
     case (v, FullValue) => v
     case (NoValue, _) => NoValue
     case (_, NoValue) => NoValue
+    case (PartialValue, _) => NoValue
+    case (_, PartialValue) => NoValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
     case (m1: FunctionValue, m2: FunctionValue) => UnionValue(Set(m1, m2))
     case (o1: SliceValue, o2: SliceValue) =>
@@ -88,8 +90,13 @@ sealed trait Value {
         val res = fv(i => FullValue, i => NoPosition, pos, testHeap)
         if (res.hasErrors) FilledValue
         else recur(res.value)
+      case sv: SliceValue =>
+        if (sv.classInfos.nonEmpty) FilledValue
+        else sv.symbols.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
+          v.widen(heap, pos).join(acc)
+        }
       case ov: ObjectValue =>
-        if (obj.init) FilledValue
+        if (!obj.init) PartialValue
         else obj.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           v.widen(heap, pos).join(acc)
         }
@@ -177,13 +184,16 @@ object FullValue extends OpaqueValue {
     else Res()
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
+    val cls = constr.owner.asClass
     val paramInfos = constr.info.paramInfoss.flatten
     val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
     val args = (0 until paramInfos.size).map(values)
-    if (args.exists(_.widen(obj.heap, pos) < FullValue)) Res(value = FilledValue)
-    else Res(value = FullValue)
+    if (args.exists(_.widen(obj.heap, pos) < FullValue)) obj.add(cls, FilledValue)
+    else obj.add(cls, FullValue)
+
+    Res()
   }
 }
 
@@ -229,7 +239,9 @@ object PartialValue extends OpaqueValue {
       return res
     }
 
-    Res(value = FilledValue)
+    obj.add(cls, FilledValue)
+
+    Res()
   }
 }
 
@@ -272,7 +284,9 @@ object FilledValue extends OpaqueValue {
       return res
     }
 
-    Res(value = FilledValue)
+    obj.add(cls, FilledValue)
+
+    Res()
   }
 }
 
@@ -422,6 +436,7 @@ class ObjectValue(tp: Type, var init: Boolean = false, val open: Boolean = false
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
     val cls = constr.owner.asClass
     if (slices.contains(cls.owner)) {
+      if (this.widen(heap, pos) < FullValue) obj.add(cls, FilledValue)
       slices(cls.owner).init(constr, values, argPos, pos, obj, indexer)
     }
     else {
