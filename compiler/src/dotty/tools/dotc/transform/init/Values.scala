@@ -91,13 +91,14 @@ sealed trait Value {
         if (res.hasErrors) FilledValue
         else recur(res.value)
       case sv: SliceValue =>
-        if (sv.classInfos.nonEmpty) FilledValue
-        else sv.symbols.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
+        val slice = heap(sv.id).asSlice
+        if (slice.classInfos.nonEmpty) FilledValue
+        else slice.symbols.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           v.widen(heap, pos).join(acc)
         }
       case ov: ObjectValue =>
-        if (!obj.init) PartialValue
-        else obj.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
+        if (!ov.init) PartialValue
+        else ov.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           v.widen(heap, pos).join(acc)
         }
       case UnionValue(vs) =>
@@ -146,7 +147,7 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
     values.foldLeft(Res()) { (acc, value) =>
-      value.init(constr, args, argPos, pos, obj2, heap, indexer).join(acc)
+      value.init(constr, values, argPos, pos, obj, heap, indexer).join(acc)
     }
   }
 
@@ -190,7 +191,7 @@ object FullValue extends OpaqueValue {
     if (res.hasErrors) return res
 
     val args = (0 until paramInfos.size).map(values)
-    if (args.exists(_.widen(obj.heap, pos) < FullValue)) obj.add(cls, FilledValue)
+    if (args.exists(_.widen(heap, pos) < FullValue)) obj.add(cls, FilledValue)
     else obj.add(cls, FullValue)
 
     Res()
@@ -232,7 +233,7 @@ object PartialValue extends OpaqueValue {
     val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
-    val cls = constr.owner
+    val cls = constr.owner.asClass
     if (!cls.isPartial) {
       res += Generic(s"The nested $cls should be marked as `@partial` in order to be instantiated", pos)
       res.value = FullValue
@@ -277,7 +278,7 @@ object FilledValue extends OpaqueValue {
     val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
-    val cls = constr.owner
+    val cls = constr.owner.asClass
     if (!cls.isPartial && !cls.isFilled) {
       res += Generic(s"The nested $cls should be marked as `@partial` or `@filled` in order to be instantiated", pos)
       res.value = FullValue
@@ -318,13 +319,13 @@ class SliceValue(val id: Int) extends SingleValue {
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
 
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
-    val slice = heap(id).asSclie
+    val slice = heap(id).asSlice
     val value = slice(sym)
 
     if (sym.is(Flags.Lazy)) {
       if (value.isInstanceOf[LazyValue]) {
-        val res = value(Nil, Nil, pos, obj.heap)
-        obj(sym) = res.value
+        val res = value(Nil, Nil, pos, heap)
+        slice(sym) = res.value
 
         if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
         else Res(value = res.value)
@@ -332,21 +333,15 @@ class SliceValue(val id: Int) extends SingleValue {
       else Res(value = value)
     }
     else if (sym.is(Flags.Method)) {
-      val res =
-        if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
-          val res2 = value(Nil, Nil, pos, obj.heap)
+      if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
+        val res2 = value(Nil, Nil, pos, heap)
 
-          if (res2.effects.nonEmpty)
-            res2.effects = Vector(Call(sym, res2.effects, pos))
+        if (res2.effects.nonEmpty)
+          res2.effects = Vector(Call(sym, res2.effects, pos))
 
-          res2
-        }
-        else Res(value = value)
-
-      if (obj.open && !sym.hasAnnotation(defn.PartialAnnot) && !sym.isEffectivelyFinal)
-        res += OverrideRisk(sym, pos)
-
-      res
+        res2
+      }
+      else Res(value = value)
     }
     else {
       var effs = Vector.empty[Effect]
@@ -382,7 +377,7 @@ class SliceValue(val id: Int) extends SingleValue {
   }
 }
 
-class ObjectValue(tp: Type, var init: Boolean = false, val open: Boolean = false) extends SingleValue {
+class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = false) extends SingleValue {
   /** slices of the object */
   private var _slices: Map[ClassSymbol, Value] = Map()
   def slices: Map[ClassSymbol, Value] = _slices
@@ -405,8 +400,9 @@ class ObjectValue(tp: Type, var init: Boolean = false, val open: Boolean = false
 
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val target = resolve(sym)
-    if (slices.contains(target.owner)) {
-      val res = slices(target.owner).select(target, heap, pos)
+    val cls = target.owner.asClass
+    if (slices.contains(cls)) {
+      val res = slices(cls).select(target, heap, pos)
       if (open && !target.hasAnnotation(defn.PartialAnnot) && !target.hasAnnotation(defn.FilledAnnot) && !target.isEffectivelyFinal)
         res += OverrideRisk(target, pos)
       res
@@ -420,8 +416,9 @@ class ObjectValue(tp: Type, var init: Boolean = false, val open: Boolean = false
 
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val target = resolve(sym)
-    if (slices.contains(target.owner)) {
-      val res = slices(target.owner).assign(target, value, heap, pos)
+    val cls = target.owner.asClass
+    if (slices.contains(cls)) {
+      val res = slices(cls).assign(target, value, heap, pos)
       if (open && !target.isEffectivelyFinal)
         res += OverrideRisk(target, pos)
       res
@@ -435,13 +432,14 @@ class ObjectValue(tp: Type, var init: Boolean = false, val open: Boolean = false
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
     val cls = constr.owner.asClass
-    if (slices.contains(cls.owner)) {
+    val outerCls = cls.owner.asClass
+    if (slices.contains(outerCls)) {
       if (this.widen(heap, pos) < FullValue) obj.add(cls, FilledValue)
-      slices(cls.owner).init(constr, values, argPos, pos, obj, indexer)
+      slices(outerCls).init(constr, values, argPos, pos, obj, heap, indexer)
     }
     else {
       val value = if (cls.isDefinedOn(tp)) FilledValue else PartialValue
-      value.init(constr, values, argPos, pos, obj, indexer)
+      value.init(constr, values, argPos, pos, obj, heap, indexer)
     }
   }
 }

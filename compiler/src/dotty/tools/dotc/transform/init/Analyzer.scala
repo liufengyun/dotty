@@ -187,6 +187,7 @@ class Analyzer extends Indexer {
 
   /** Check a parent call */
   def checkInit(tp: Type, init: Symbol, argss: List[List[Tree]], env: Env, obj: ObjectValue, pos: Position)(implicit ctx: Context): Res = {
+    val cls = init.owner.asClass
     val args = argss.flatten
 
     // setup constructor params
@@ -204,7 +205,7 @@ class Analyzer extends Indexer {
       case tp: TypeRef => tp.prefix
     }
 
-    val prefix = toPrefix(tref)
+    val prefix = toPrefix(tp)
     if (prefix == NoPrefix) env.init(cls, argValues, args.map(_.pos), pos, obj, this)
     else {
       val prefixRes = checkRef(prefix, env, pos)
@@ -242,7 +243,7 @@ class Analyzer extends Indexer {
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val obj = new ObjectValue(tree.tpe, init = false, open = false)
-    val res = checkInit(obj.tp, tree.symbol, args, env, obj, tree.pos)
+    val res = checkInit(obj.tp, tree.symbol, argss, env, obj, tree.pos)
     obj.init = true
     res.value = obj
     res

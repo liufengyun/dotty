@@ -99,8 +99,15 @@ trait Indexer { self: Analyzer =>
       Res()
     }
     else checking(cls) {
-      val slice = env.newSlice()
-      obj.add(new SliceValue(slice.id))
+      val slice = env.newSlice(cls)
+      obj.add(cls, new SliceValue(slice.id))
+
+      // The outer of parents are set (but not recursively)
+      // before any super-calls if they are known.
+      // This is not specified in the Scala specification.
+      // Calling methods of an unrelated trait during initialization
+      // is dangerous, thus should be discouraged. Therefore, the analyzer
+      // doesn't follow closely the semantics here.
 
       // first index current class
       indexMembers(tmpl.body, slice)
@@ -108,7 +115,7 @@ trait Indexer { self: Analyzer =>
       // propagate constructor arguments
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
         val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-        if (sym.exists) obj.add(sym, values(index))
+        if (sym.exists) slice.add(sym, values(index))
         slice.innerEnv.add(param.symbol, values(index))
       }
 

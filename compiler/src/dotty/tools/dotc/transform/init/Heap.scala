@@ -143,9 +143,9 @@ class Env(outerId: Int) extends HeapEntry {
     env
   }
 
-  def newSlice(tp: Type, heap: Heap = this.heap): SliceRep = {
+  def newSlice(cls: ClassSymbol, heap: Heap = this.heap): SliceRep = {
     val innerEnv = fresh(heap)
-    val slice = new SliceRep(tp, innerEnvId = innerEnv.id)
+    val slice = new SliceRep(cls, innerEnvId = innerEnv.id)
     heap.add(slice)
     slice
   }
@@ -234,7 +234,7 @@ class Env(outerId: Int) extends HeapEntry {
       val tmpl = this.getClassDef(cls)
       indexer.init(constr, tmpl, values, argPos, pos, obj, this)
     }
-    else FullValue.init(constr, values, argPos, pos, obj, indexer)
+    else FullValue.init(constr, values, argPos, pos, obj, heap, indexer)
   }
 
   override def toString: String =
@@ -248,7 +248,7 @@ class Env(outerId: Int) extends HeapEntry {
 
 /** A container holds all information about fields of an class slice of an object
  */
-class SliceRep(val tp: Type, innerEnvId: Int) extends HeapEntry with Cloneable {
+class SliceRep(val cls: ClassSymbol, innerEnvId: Int) extends HeapEntry with Cloneable {
   override def clone: SliceRep = super.clone.asInstanceOf[SliceRep]
 
   def innerEnv: Env = heap(innerEnvId).asEnv
@@ -304,10 +304,9 @@ class SliceRep(val tp: Type, innerEnvId: Int) extends HeapEntry with Cloneable {
   }
 
   override def toString: String =
-    s"""~ --------------${id}---------------------
+    s"""~ --------------${cls}(${id})---------------------
         ~ | fields:  ${_syms.keys}
         ~ | not initialized:  ${notAssigned}
-        ~ | lazy not forced:  ${notForcedSyms}
-        ~ | class: $tp"""
+        ~ | lazy not forced:  ${notForcedSyms}"""
     .stripMargin('~')
 }
