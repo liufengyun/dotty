@@ -26,7 +26,7 @@ trait HeapEntry extends Cloneable {
   override def clone: HeapEntry = super.clone.asInstanceOf[HeapEntry]
 
   def asEnv: Env = this.asInstanceOf[Env]
-  def asObj: ObjectRep = this.asInstanceOf[ObjectRep]
+  def asSlice: SliceRep = this.asInstanceOf[SliceRep]
 }
 
 object Heap {
@@ -53,8 +53,8 @@ object Heap {
   def join(entry1: HeapEntry, entry2: HeapEntry): HeapEntry = (entry1, entry2) match {
     case (env1: Env, env2: Env) =>
       env1.join(env2)
-    case (obj1: ObjectRep, obj2: ObjectRep) =>
-      obj1.join(obj2)
+    case (s1: SliceRep, s2: SliceRep) => // caller ensures `s1.id = s2.id`
+      s1.join(s2)
     case _ =>
       throw new Exception(s"Cannot join $entry1 and $entry2")
   }
@@ -143,10 +143,10 @@ class Env(outerId: Int) extends HeapEntry {
     env
   }
 
-  def newObject(tp: Type, heap: Heap = this.heap, open: Boolean = true): ObjectRep = {
-    val obj = new ObjectRep(tp, open)
-    heap.add(obj)
-    obj
+  def newSlice(tp: Type, heap: Heap = this.heap): SliceRep = {
+    val slice = new SliceRep(tp)
+    heap.add(slice)
+    slice
   }
 
   def apply(sym: Symbol): Value =
@@ -227,7 +227,7 @@ class Env(outerId: Int) extends HeapEntry {
       Res()
     }
 
-  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, indexer: Indexer)(implicit ctx: Context): Res = {
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, indexer: Indexer)(implicit ctx: Context): Res = {
     val cls = constr.owner.asClass
     if (this.containsClass(cls)) {
       val tmpl = this.getClassDef(cls)
@@ -245,25 +245,18 @@ class Env(outerId: Int) extends HeapEntry {
     .stripMargin('~')
 }
 
-/** A container holds all information about fields of an object and outers of nested classes
+/** A container holds all information about fields of an class slice of an object
  */
-class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = false) extends HeapEntry with Cloneable {
-  override def clone: ObjectRep = super.clone.asInstanceOf[ObjectRep]
-
-  def fresh: ObjectRep = {
-    val obj = new ObjectRep(tp, open)
-    obj._syms = this._syms
-    obj._classInfos = this._classInfos
-    heap.add(obj)
-    obj
-  }
+class SliceRep(val tp: Type, innerEnv: Int) extends HeapEntry with Cloneable {
+  override def clone: SliceRep = super.clone.asInstanceOf[SliceRep]
 
   /** inner class definitions */
-  private var _classInfos: Map[ClassSymbol, (Template, Int)] = Map()
-  def add(cls: ClassSymbol, info: (Template, Int)) = _classInfos = _classInfos.updated(cls, info)
-  def classInfos: Map[ClassSymbol, (Template, Int)] = _classInfos
+  private var _classInfos: Map[ClassSymbol, Template] = Map()
+  def add(cls: ClassSymbol, info: Template) = _classInfos =
+    _classInfos.updated(cls, info)
+  def classInfos: Map[ClassSymbol, Template] = _classInfos
 
-  /** methods and fields of the object */
+  /** methods and fields of the slice */
   private var _syms: Map[Symbol, Value] = Map()
 
   def apply(sym: Symbol): Value =
@@ -275,7 +268,6 @@ class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = fals
   def remove(sym: Symbol) =
     _syms = _syms - sym
 
-  // object environment should not resolve outer
   def update(sym: Symbol, value: Value): Unit = {
     assert(_syms.contains(sym))
     _syms = _syms.updated(sym, value)
@@ -287,9 +279,9 @@ class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = fals
   def notAssigned = _syms.keys.filter(sym => _syms(sym) == NoValue)
   def notForcedSyms  = _syms.keys.filter(sym => _syms(sym).isInstanceOf[LazyValue])
 
-  // Invariant: two objects with the same id always have the same `classInfos`,
+  // Invariant: two slices with the same id always have the same `classInfos`,
   //            thus they can be safely ignored in `join`.
-  def join(obj2: ObjectRep): ObjectRep = {
+  def join(obj2: SliceRep): SliceRep = {
     assert(this.id == obj2.id)
 
     _syms.foreach { case (sym: Symbol, value: Value) =>
@@ -302,7 +294,7 @@ class ObjectRep(val tp: Type, val open: Boolean = true, var init: Boolean = fals
   }
 
   override def equals(that: Any): Boolean = that match {
-    case that: ObjectRep => that.id == this.id
+    case that: SliceRep => that.id == this.id
     case _ => false
   }
 

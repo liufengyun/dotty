@@ -185,7 +185,24 @@ class Analyzer extends Indexer {
     }
   }
 
-  def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Res = {
+  /** Check a parent call */
+  def checkParent(init: Symbol, argss: List[List[Tree]], env: Env, obj: ObjectValue, pos: Position)(implicit ctx: Context): Res = {
+    val args = argss.flatten
+
+    // setup constructor params
+    var effs = Vector.empty[Effect]
+    val argValues = args.map { arg =>
+      val res = apply(arg, env)
+      effs = effs ++ res.effects
+      res.value
+    }
+
+    if (effs.nonEmpty) return Res(effs)
+
+    obj(init).apply(argValues, args.map(_.pos), pos, obj.heap)
+  }
+
+  def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectValue)(implicit ctx: Context): Res = {
     if (cls.is(Trait)) return Res()
 
     // first call super class, see spec 5.1 about "Template Evaluation".
@@ -200,6 +217,7 @@ class Analyzer extends Indexer {
     val remains = cls.baseClasses.tail.takeWhile(_ `ne` superCls).reverse
 
     // handle remaning traits
+    // TODO: why only `obj`?
     remains.foldLeft(res) { (acc, traitCls) =>
       val parentOpt = parents.find(_.tpe.classSymbol `eq` traitCls)
       parentOpt match {
@@ -239,29 +257,6 @@ class Analyzer extends Indexer {
       if (prefixRes.hasErrors) return prefixRes
       prefixRes.value.init(cls, argValues, args.map(_.pos), tree.pos, obj, this)
     }
-  }
-
-  /** Check a parent call
-   *
-   *  The result is only checked for errors, the value is only meaningful for
-   *  the top-level `init` called in `checkNew`.
-   *
-   *  Disregard the prefix, as it is already handled in `index`.
-   */
-  def checkParent(init: Symbol, argss: List[List[Tree]], env: Env, obj: ObjectRep, pos: Position)(implicit ctx: Context): Res = {
-    val args = argss.flatten
-
-    // setup constructor params
-    var effs = Vector.empty[Effect]
-    val argValues = args.map { arg =>
-      val res = apply(arg, env)
-      effs = effs ++ res.effects
-      res.value
-    }
-
-    if (effs.nonEmpty) return Res(effs)
-
-    obj(init).apply(argValues, args.map(_.pos), pos, obj.heap)
   }
 
   object NewEx {

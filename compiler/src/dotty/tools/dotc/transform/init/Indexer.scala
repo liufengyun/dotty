@@ -76,22 +76,22 @@ trait Indexer { self: Analyzer =>
 
   /** Index member definitions
    *
-   *  trick: use `ObjectRep` for name resolution, but `env` for method execution
+   *  trick: use `slice` for name resolution, but `env` for method execution
    */
-  def indexMembers(stats: List[Tree], env: Env, obj: ObjectRep)(implicit ctx: Context): Unit = stats.foreach {
+  def indexMembers(stats: List[Tree], env: Env, slice: SliceRep)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef =>
-      obj.add(ddef.symbol, methodValue(ddef, env))
+      slice.add(ddef.symbol, methodValue(ddef, env))
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      obj.add(vdef.symbol, lazyValue(vdef, env))
+      slice.add(vdef.symbol, lazyValue(vdef, env))
     case vdef: ValDef =>
-      obj.add(vdef.symbol, NoValue)
+      slice.add(vdef.symbol, NoValue)
     case tdef: TypeDef if tdef.isClassDef  =>
       // class has to be handled differently because of inheritance
-      obj.add(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template] -> env.id)
+      slice.add(tdef.symbol.asClass, tdef.rhs.asInstanceOf[Template])
     case _ =>
   }
 
-  def init(constr: Symbol, tmpl: Template, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectRep, env: Env)(implicit ctx: Context): Res = {
+  def init(constr: Symbol, tmpl: Template, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, env: Env)(implicit ctx: Context): Res = {
     val cls = constr.owner.asClass
 
     if (isChecking(cls)) {
