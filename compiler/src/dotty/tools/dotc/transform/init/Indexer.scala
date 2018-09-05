@@ -78,11 +78,11 @@ trait Indexer { self: Analyzer =>
    *
    *  trick: use `slice` for name resolution, but `env` for method execution
    */
-  def indexMembers(stats: List[Tree], env: Env, slice: SliceRep)(implicit ctx: Context): Unit = stats.foreach {
+  def indexMembers(stats: List[Tree], slice: SliceRep)(implicit ctx: Context): Unit = stats.foreach {
     case ddef: DefDef =>
-      slice.add(ddef.symbol, methodValue(ddef, env))
+      slice.add(ddef.symbol, methodValue(ddef, slice.innerEnv))
     case vdef: ValDef if vdef.symbol.is(Lazy)  =>
-      slice.add(vdef.symbol, lazyValue(vdef, env))
+      slice.add(vdef.symbol, lazyValue(vdef, slice.innerEnv))
     case vdef: ValDef =>
       slice.add(vdef.symbol, NoValue)
     case tdef: TypeDef if tdef.isClassDef  =>
@@ -99,27 +99,28 @@ trait Indexer { self: Analyzer =>
       Res()
     }
     else checking(cls) {
-      val innerClsEnv = env.fresh()
+      val slice = env.newSlice()
+      obj.add(new SliceValue(slice.id))
 
       // first index current class
-      indexMembers(tmpl.body, innerClsEnv, obj)
+      indexMembers(tmpl.body, slice)
 
       // propagate constructor arguments
       tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
         val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
         if (sym.exists) obj.add(sym, values(index))
-        innerClsEnv.add(param.symbol, values(index))
+        slice.innerEnv.add(param.symbol, values(index))
       }
 
       // call parent constructor
-      val res = checkParents(cls, tmpl.parents, innerClsEnv, obj)
-      if (res.hasErrors) return res.copy(value = FullValue)
+      val res = checkParents(cls, tmpl.parents, slice.innerEnv, obj)
+      if (res.hasErrors) return res
 
       // setup this
-      innerClsEnv.add(cls, res.value)
+      slice.innerEnv.add(cls, obj)
 
       // check current class body
-      res ++= checkStats(tmpl.body, innerClsEnv).effects
+      res ++= checkStats(tmpl.body, slice.innerEnv).effects
       res
     }
   }

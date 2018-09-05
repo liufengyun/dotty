@@ -144,7 +144,8 @@ class Env(outerId: Int) extends HeapEntry {
   }
 
   def newSlice(tp: Type, heap: Heap = this.heap): SliceRep = {
-    val slice = new SliceRep(tp)
+    val innerEnv = fresh(heap)
+    val slice = new SliceRep(tp, innerEnvId = innerEnv.id)
     heap.add(slice)
     slice
   }
@@ -247,8 +248,10 @@ class Env(outerId: Int) extends HeapEntry {
 
 /** A container holds all information about fields of an class slice of an object
  */
-class SliceRep(val tp: Type, innerEnv: Int) extends HeapEntry with Cloneable {
+class SliceRep(val tp: Type, innerEnvId: Int) extends HeapEntry with Cloneable {
   override def clone: SliceRep = super.clone.asInstanceOf[SliceRep]
+
+  def innerEnv: Env = heap(innerEnvId).asEnv
 
   /** inner class definitions */
   private var _classInfos: Map[ClassSymbol, Template] = Map()
