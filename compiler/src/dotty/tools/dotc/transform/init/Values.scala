@@ -303,12 +303,6 @@ class SliceValue(val id: Int)(implicit ctx: Context) extends SingleValue {
   /** not supported, impossible to apply an object value */
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
 
-  // handle dynamic dispatch
-  private def resolve(sym: Symbol, tp: Type, open: Boolean)(implicit ctx: Context): Symbol = {
-    if (sym.isClass || sym.isConstructor || sym.isEffectivelyFinal || sym.is(Flags.Private)) sym
-    else sym.matchingMember(tp)
-  }
-
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val obj = heap(id).asObj
     val target = resolve(sym, obj.tp, obj.open)
@@ -396,8 +390,58 @@ class SliceValue(val id: Int)(implicit ctx: Context) extends SingleValue {
   }
 }
 
-class ObjectValue(tp: Type, var init: Boolean = false) extends SingleValue {
+class ObjectValue(tp: Type, var init: Boolean = false, val open: Boolean = false) extends SingleValue {
   /** slices of the object */
   private var _slices: Map[ClassSymbol, Value] = Map()
   def slices: Map[ClassSymbol, Value] = _slices
+
+  // handle dynamic dispatch
+  private def resolve(sym: Symbol)(implicit ctx: Context): Symbol = {
+    if (sym.isClass || sym.isConstructor || sym.isEffectivelyFinal || sym.is(Flags.Private)) sym
+    else sym.matchingMember(tp)
+  }
+
+  /** not supported, impossible to apply an object value */
+  def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = ???
+
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    val target = resolve(sym)
+    if (slices.contains(target.owner)) {
+      val res = slices(target.owner).select(target, heap, pos)
+      if (open && !target.hasAnnotation(defn.PartialAnnot) && !target.hasAnnotation(defn.FilledAnnot) && !target.isEffectivelyFinal)
+        res += OverrideRisk(target, pos)
+      res
+    }
+    else {
+      // two cases: (1) select on unknown super; (2) select on self annotation
+      if (target.isDefinedOn(tp)) FilledValue.select(target, heap, pos)
+      else PartialValue.select(target, heap, pos)
+    }
+  }
+
+  def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
+    val target = resolve(sym)
+    if (slices.contains(target.owner)) {
+      val res = slices(target.owner).assign(target, value, heap, pos)
+      if (open && !target.isEffectivelyFinal)
+        res += OverrideRisk(target, pos)
+      res
+    }
+    else {
+      // two cases: (1) select on unknown super; (2) select on self annotation
+      if (target.isDefinedOn(tp)) FilledValue.assign(target, value, heap, pos)
+      else PartialValue.assign(target, value, heap, pos)
+    }
+  }
+
+  def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, indexer: Indexer)(implicit ctx: Context): Res = {
+    val cls = constr.owner.asClass
+    if (slices.contains(cls.owner)) {
+      slices(cls.owner).init(constr, values, argPos, pos, obj, indexer)
+    }
+    else {
+      val value = if (cls.isDefinedOn(tp)) FilledValue else PartialValue
+      value.init(constr, values, argPos, pos, obj, indexer)
+    }
+  }
 }
