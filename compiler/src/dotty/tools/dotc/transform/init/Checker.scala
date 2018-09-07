@@ -137,7 +137,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     // current class env needs special setup
     val root = Heap.createRootEnv
-    val obj = new ObjectValue(tp = cls.typeRef, open = cls.is(Final))
+    val obj = new ObjectValue(tp = cls.typeRef, open = !cls.is(Final))
       // enhancement possible to check if there are actual children
       // and whether children are possible in other modules.
 
@@ -147,7 +147,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     // init object
     val constr = tmpl.constr
-    val values = constr.vparamss.flatten.map { param => param.symbol.value }
+    val values = constr.vparamss.flatten.map { param => param.tpe.widen.value }
     val poss = constr.vparamss.flatten.map(_.pos)
     val res = root.init(constr.symbol, values, poss, cls.pos, obj, analyzer)
 
@@ -156,7 +156,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     res.effects.foreach(_.report)
     slice.notAssigned.foreach { sym =>
-      ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
+      if (!sym.is(Deferred)) ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 
     debug(obj.toString)

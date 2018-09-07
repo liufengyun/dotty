@@ -403,7 +403,12 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
     val cls = target.owner.asClass
     if (slices.contains(cls)) {
       val res = slices(cls).select(target, heap, pos)
-      if (open && !target.hasAnnotation(defn.PartialAnnot) && !target.hasAnnotation(defn.FilledAnnot) && !target.isEffectivelyFinal)
+      // ignore field access, but field access in Scala
+      // are method calls, thus is unsafe as well
+      if (open && target.is(Flags.Method) &&
+          !target.hasAnnotation(defn.PartialAnnot) &&
+          !target.hasAnnotation(defn.FilledAnnot) &&
+          !target.isEffectivelyFinal)
         res += OverrideRisk(target, pos)
       res
     }
@@ -418,10 +423,7 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
     val target = resolve(sym)
     val cls = target.owner.asClass
     if (slices.contains(cls)) {
-      val res = slices(cls).assign(target, value, heap, pos)
-      if (open && !target.isEffectivelyFinal)
-        res += OverrideRisk(target, pos)
-      res
+      slices(cls).assign(target, value, heap, pos)
     }
     else {
       // two cases: (1) select on unknown super; (2) select on self annotation

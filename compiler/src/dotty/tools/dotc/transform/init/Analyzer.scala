@@ -206,11 +206,11 @@ class Analyzer extends Indexer {
     }
 
     val prefix = toPrefix(tp)
-    if (prefix == NoPrefix) env.init(cls, argValues, args.map(_.pos), pos, obj, this)
+    if (prefix == NoPrefix) env.init(init, argValues, args.map(_.pos), pos, obj, this)
     else {
       val prefixRes = checkRef(prefix, env, pos)
       if (prefixRes.hasErrors) return prefixRes
-      prefixRes.value.init(cls, argValues, args.map(_.pos), pos, obj, env.heap, this)
+      prefixRes.value.init(init, argValues, args.map(_.pos), pos, obj, env.heap, this)
     }
   }
 
