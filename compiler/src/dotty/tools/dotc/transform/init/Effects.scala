@@ -50,8 +50,7 @@ sealed trait Effect {
     case Uninit(sym, pos)         =>
       ctx.warning(s"Reference to uninitialized value `${sym.name}`", pos)
     case OverrideRisk(sym, pos)     =>
-      ctx.warning(s"`@partial` or `@filled` is recommended for $sym for safe overriding", sym.pos)
-      ctx.warning(s"Reference to $sym which could be overriden", pos)
+      ctx.warning(s"Reference to $sym which could be overriden. Consider make the method final or annotate it with `@partial` or `@filled` for safe overriding", pos)
     case Call(sym, effects, pos)  =>
       ctx.warning(s"The call to `${sym.name}` causes initialization problem", pos)
       effects.foreach(_.report)
@@ -69,7 +68,6 @@ sealed trait Effect {
       effs.foreach(_.report)
     case Generic(msg, pos) =>
       ctx.warning(msg, pos)
-
   }
 }
 

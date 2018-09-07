@@ -405,7 +405,7 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
       val res = slices(cls).select(target, heap, pos)
       // ignore field access, but field access in Scala
       // are method calls, thus is unsafe as well
-      if (open && target.is(Flags.Method) &&
+      if (open && (target.is(Flags.Method) || target.is(Flags.Lazy)) &&
           !target.hasAnnotation(defn.PartialAnnot) &&
           !target.hasAnnotation(defn.FilledAnnot) &&
           !target.isEffectivelyFinal)
