@@ -10,4 +10,6 @@ final class Foo(x: Int) {
   f()     // error
 
   println(title)  // error
+
+  title = "hello"
 }

@@ -69,8 +69,16 @@ sealed trait Value {
     case (_, PartialValue) => NoValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
     case (o1: ObjectValue, o2: ObjectValue) if o1 `eq` o2 => o1
-    case (m1: FunctionValue, m2: FunctionValue) =>
-      UnionValue(Set(m1, m2))
+    case (f1: FunctionValue, f2: FunctionValue) =>
+      new FunctionValue {
+        def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+          val heap2 = heap.clone
+          val res1 = f1(values, argPos, pos, heap)
+          val res2 = f2(values, argPos, pos, heap2)
+          heap.join(heap2)
+          res1.join(res2)
+        }
+      }
     case (o1: SliceValue, o2: SliceValue) =>
       if (o1.id == o2.id) o1
       else new UnionValue(Set(o1, o2))

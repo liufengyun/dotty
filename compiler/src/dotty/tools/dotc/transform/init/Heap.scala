@@ -132,11 +132,6 @@ class Env(outerId: Int) extends HeapEntry {
 
   def outer: Env = heap(outerId).asInstanceOf[Env]
 
-  def deepClone: Env = {
-    val heap2 = heap.clone
-    heap2(this.id).asInstanceOf[Env]
-  }
-
   def fresh(heap: Heap = this.heap): Env = {
     val env = new Env(this.id)
     heap.add(env)

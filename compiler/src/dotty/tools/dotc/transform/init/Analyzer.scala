@@ -24,7 +24,7 @@ import Constants.Constant
 import collection.mutable
 
 
-class Analyzer extends Indexer {
+class Analyzer extends Indexer { analyzer =>
   import tpd._
 
   var depth: Int = 0
@@ -108,14 +108,19 @@ class Analyzer extends Indexer {
 
     val condRes: Res = apply(cond, env)
 
-    val envClone = env.deepClone
-    val thenRes: Res = apply(thenp, env)
-    val elseRes: Res = apply(elsep, envClone)
+    def makeFun(body: Tree) = new FunctionValue {
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+        val envCurrent = heap(env.id).asEnv
+        analyzer.apply(body, envCurrent)
+      }
+    }
 
-    env.heap.join(envClone.heap)
+    val thenFun = makeFun(thenp)
+    val elseFun = makeFun(elsep)
 
-    thenRes ++= condRes.effects
-    thenRes.join(elseRes)
+    val res = thenFun.join(elseFun).apply(Nil, Nil, NoPosition, env.heap)
+    res ++= condRes.effects
+    res
   }
 
   def checkValDef(vdef: ValDef, env: Env)(implicit ctx: Context): Res = {
