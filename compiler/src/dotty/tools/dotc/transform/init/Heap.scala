@@ -237,13 +237,15 @@ class Env(outerId: Int) extends HeapEntry {
     else FullValue.init(constr, values, argPos, pos, obj, heap, indexer)
   }
 
-  override def toString: String =
-    (if (outerId > 0) outer.toString + "\n" else "") ++
+  def show(printed: mutable.Set[Int] = mutable.Set())(implicit ctx: Context): String = {
+    def members = _syms.map { case (k, v) => k.show + " -> " + v.show(heap, printed) }.mkString("~ | ", "\n~ | ", "")
+    (if (outerId > 0) outer.show(printed) + "\n" else "") ++
     s"""~ -------------- $id($outerId) ---------------------
-        ~ | locals:  ${_syms.keys}
+        ${members}
         ~ | not initialized:  ${notAssigned}
         ~ | lazy not forced:  ${notForcedSyms}"""
     .stripMargin('~')
+  }
 }
 
 /** A container holds all information about fields of an class slice of an object
@@ -303,10 +305,20 @@ class SliceRep(val cls: ClassSymbol, innerEnvId: Int) extends HeapEntry with Clo
     case _ => false
   }
 
-  override def toString: String =
-    s"""~ --------------${cls}(${id})---------------------
-        ~ | fields:  ${_syms.keys}
-        ~ | not initialized:  ${notAssigned}
-        ~ | lazy not forced:  ${notForcedSyms}"""
+  def show(printed: mutable.Set[Int])(implicit ctx: Context): String = {
+    if (printed.contains(id)) return "id: " + id
+
+    printed += id
+    def members = _syms.map { case (k, v) =>
+      k.show + " -> " + v.show(heap, printed)
+    }.mkString("~   ", "\n~   ", "")
+
+    s"""~
+        ~   id: $id($innerEnvId)
+        ${members}
+        ~   not initialized:  ${notAssigned}
+        ~   lazy not forced:  ${notForcedSyms}"""
     .stripMargin('~')
+  }
 }
+

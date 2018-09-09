@@ -30,13 +30,13 @@ class Analyzer extends Indexer {
   var depth: Int = 0
   val indentTab = " "
 
-  def trace[T](msg: String, env: Env)(body: => T) = {
+  def trace(msg: String, env: Env)(body: => Res)(implicit ctx: Context) = {
     indentedDebug(s"==> ${pad(msg)}?")
-    indentedDebug(env.toString)
+    indentedDebug(env.show())
     depth += 1
     val res = body
     depth -= 1
-    indentedDebug(s"<== ${pad(msg)} = ${pad(res.toString)}")
+    indentedDebug(s"<== ${pad(msg)} = ${pad(res.show(env.heap))}")
     res
   }
 
@@ -141,7 +141,7 @@ class Analyzer extends Indexer {
 
   def checkStats(stats: List[Tree], env: Env)(implicit ctx: Context): Res =
     stats.foldLeft(Res()) { (acc, stat) =>
-      indentedDebug(s"acc = ${pad(acc.toString)}")
+      indentedDebug(s"acc = ${pad(acc.show(env.heap))}")
       val res1 = apply(stat, env)
       acc.copy(effects = acc.effects ++ res1.effects)
     }

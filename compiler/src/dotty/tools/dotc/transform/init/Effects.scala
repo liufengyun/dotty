@@ -32,10 +32,10 @@ case class Res(var effects: Effects = Vector.empty, var value: Value = FullValue
       value   = res2.value.join(value)
     )
 
-  override def toString: String =
+  def show(heap: Heap)(implicit ctx: Context): String =
     s"""~Res(
         ~| effects = ${if (effects.isEmpty) "()" else effects.mkString("\n|    - ", "\n|    - ", "")}
-        ~| value   = $value
+        ~| value   = ${value.show(heap)}
         ~)"""
     .stripMargin('~')
 }

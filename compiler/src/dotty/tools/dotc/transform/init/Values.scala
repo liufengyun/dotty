@@ -54,6 +54,8 @@ sealed trait Value {
   /** Apply a method or function to the provided arguments */
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res
 
+  def show(heap: Heap, printed: mutable.Set[Int] = mutable.Set())(implicit ctx: Context): String
+
   /** Join two values
    *
    *  NoValue < Partial < Filled < Full
@@ -120,6 +122,8 @@ object NoValue extends Value {
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "NoValue"
 }
 
 /** A single value, instead of a union value */
@@ -153,6 +157,8 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
 
   def +(value: SingleValue): UnionValue = UnionValue(values + value)
   def ++(uv: UnionValue): UnionValue = UnionValue(values ++ uv.values)
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "{" + values.map(v => v.show(heap)).mkString(", ") + "}"
 }
 
 /** Values that are subject to type checking rather than analysis */
@@ -196,6 +202,8 @@ object FullValue extends OpaqueValue {
 
     Res()
   }
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Full"
 }
 
 object PartialValue extends OpaqueValue {
@@ -244,6 +252,8 @@ object PartialValue extends OpaqueValue {
 
     Res()
   }
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Partial"
 }
 
 object FilledValue extends OpaqueValue {
@@ -289,6 +299,8 @@ object FilledValue extends OpaqueValue {
 
     Res()
   }
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Filled"
 }
 
 /** A function value or value of method select */
@@ -303,6 +315,8 @@ abstract class FunctionValue extends SingleValue {
   /** not supported */
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Function@" + hashCode
 }
 
 /** A lazy value */
@@ -311,6 +325,8 @@ abstract class LazyValue extends Value {
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "LazyValue@" + hashCode
 }
 
 /** A slice of an object */
@@ -375,6 +391,8 @@ class SliceValue(val id: Int) extends SingleValue {
     case that: SliceValue => that.id == id
     case _ => false
   }
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = heap(id).asSlice.show(printed)
 }
 
 class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = false) extends SingleValue {
@@ -443,5 +461,9 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
       val value = if (cls.isDefinedOn(tp)) FilledValue else PartialValue
       value.init(constr, values, argPos, pos, obj, heap, indexer)
     }
+  }
+
+  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = {
+    slices.map { case (k, v) => "[" +k.show + "]" + v.show(heap, printed) }.mkString("{\n  ", "\n  ", "\n}")
   }
 }
