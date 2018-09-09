@@ -28,24 +28,20 @@ class Analyzer extends Indexer {
   import tpd._
 
   var depth: Int = 0
-  val indentTab = " "
 
   def trace(msg: String, env: Env)(body: => Res)(implicit ctx: Context) = {
     indentedDebug(s"==> ${pad(msg)}?")
-    indentedDebug(env.show())
+    indentedDebug(env.show(ShowSetting(env.heap)))
     depth += 1
     val res = body
     depth -= 1
-    indentedDebug(s"<== ${pad(msg)} = ${pad(res.show(env.heap))}")
+    indentedDebug(s"<== ${pad(msg)} = ${pad(res.show(ShowSetting(env.heap)))}")
     res
   }
 
-  def padding = indentTab * depth
+  def pad(s: String, padFirst: Boolean = false) = ShowSetting.pad(s, depth, padFirst)
 
-  def pad(s: String, padFirst: Boolean = false) =
-    s.split("\n").mkString(if (padFirst) padding else "", "\n" + padding, "")
-
-  def indentedDebug(msg: String) = debug(pad(msg, padFirst = true))
+  def indentedDebug(msg: String) = debug(ShowSetting.pad(msg, depth, padFirst = true))
 
   def checkApply(tree: tpd.Tree, fun: Tree, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val funSym = fun.symbol
@@ -141,7 +137,7 @@ class Analyzer extends Indexer {
 
   def checkStats(stats: List[Tree], env: Env)(implicit ctx: Context): Res =
     stats.foldLeft(Res()) { (acc, stat) =>
-      indentedDebug(s"acc = ${pad(acc.show(env.heap))}")
+      indentedDebug(s"acc = ${pad(acc.show(ShowSetting(env.heap)))}")
       val res1 = apply(stat, env)
       acc.copy(effects = acc.effects ++ res1.effects)
     }

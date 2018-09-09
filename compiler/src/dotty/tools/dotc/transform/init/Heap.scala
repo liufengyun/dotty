@@ -237,14 +237,10 @@ class Env(outerId: Int) extends HeapEntry {
     else FullValue.init(constr, values, argPos, pos, obj, heap, indexer)
   }
 
-  def show(printed: mutable.Set[Int] = mutable.Set())(implicit ctx: Context): String = {
-    def members = _syms.map { case (k, v) => k.show + " -> " + v.show(heap, printed) }.mkString("~ | ", "\n~ | ", "")
-    (if (outerId > 0) outer.show(printed) + "\n" else "") ++
-    s"""~ -------------- $id($outerId) ---------------------
-        ${members}
-        ~ | not initialized:  ${notAssigned}
-        ~ | lazy not forced:  ${notForcedSyms}"""
-    .stripMargin('~')
+  def show(setting: ShowSetting)(implicit ctx: Context): String = {
+    def members = _syms.map { case (k, v) => k.show + " ->" + setting.indent(v.show(setting), tabs = 2) }.mkString("\n")
+    (if (outerId > 0) outer.show(setting) + "\n" else "") ++
+    s"-------------- $id($outerId) ---------------------\n${members}"
   }
 }
 
@@ -305,20 +301,15 @@ class SliceRep(val cls: ClassSymbol, innerEnvId: Int) extends HeapEntry with Clo
     case _ => false
   }
 
-  def show(printed: mutable.Set[Int])(implicit ctx: Context): String = {
-    if (printed.contains(id)) return "id: " + id
+  def show(setting: ShowSetting)(implicit ctx: Context): String = {
+    if (setting.printed.contains(id)) return "id: " + id
 
-    printed += id
+    setting.printed += id
     def members = _syms.map { case (k, v) =>
-      k.show + " -> " + v.show(heap, printed)
-    }.mkString("~   ", "\n~   ", "")
+      k.show + " -> " + setting.indent(v.show(setting), tabs = 2)
+    }.mkString("\n")
 
-    s"""~
-        ~   id: $id($innerEnvId)
-        ${members}
-        ~   not initialized:  ${notAssigned}
-        ~   lazy not forced:  ${notForcedSyms}"""
-    .stripMargin('~')
+    s"\n id: $id($innerEnvId)\n${setting.indent(members, tabs = 1)}"
   }
 }
 

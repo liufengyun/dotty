@@ -32,10 +32,10 @@ case class Res(var effects: Effects = Vector.empty, var value: Value = FullValue
       value   = res2.value.join(value)
     )
 
-  def show(heap: Heap)(implicit ctx: Context): String =
+  def show(setting: ShowSetting)(implicit ctx: Context): String =
     s"""~Res(
         ~| effects = ${if (effects.isEmpty) "()" else effects.mkString("\n|    - ", "\n|    - ", "")}
-        ~| value   = ${value.show(heap)}
+        ~| value   = ${value.show(setting)}
         ~)"""
     .stripMargin('~')
 }

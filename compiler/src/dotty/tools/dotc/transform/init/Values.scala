@@ -54,7 +54,7 @@ sealed trait Value {
   /** Apply a method or function to the provided arguments */
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res
 
-  def show(heap: Heap, printed: mutable.Set[Int] = mutable.Set())(implicit ctx: Context): String
+  def show(setting: ShowSetting)(implicit ctx: Context): String
 
   /** Join two values
    *
@@ -123,7 +123,7 @@ object NoValue extends Value {
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "NoValue"
+  def show(setting: ShowSetting)(implicit ctx: Context): String = "NoValue"
 }
 
 /** A single value, instead of a union value */
@@ -158,7 +158,8 @@ case class UnionValue(val values: Set[SingleValue]) extends Value {
   def +(value: SingleValue): UnionValue = UnionValue(values + value)
   def ++(uv: UnionValue): UnionValue = UnionValue(values ++ uv.values)
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "{" + values.map(v => v.show(heap)).mkString(", ") + "}"
+  def show(setting: ShowSetting)(implicit ctx: Context): String =
+    "Or{" + setting.indent(values.map(v => v.show(setting)).mkString(", ")) + "}"
 }
 
 /** Values that are subject to type checking rather than analysis */
@@ -203,7 +204,7 @@ object FullValue extends OpaqueValue {
     Res()
   }
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Full"
+  def show(setting: ShowSetting)(implicit ctx: Context): String = "Full"
 }
 
 object PartialValue extends OpaqueValue {
@@ -253,7 +254,7 @@ object PartialValue extends OpaqueValue {
     Res()
   }
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Partial"
+  def show(setting: ShowSetting)(implicit ctx: Context): String = "Partial"
 }
 
 object FilledValue extends OpaqueValue {
@@ -300,7 +301,7 @@ object FilledValue extends OpaqueValue {
     Res()
   }
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Filled"
+  def show(setting: ShowSetting)(implicit ctx: Context): String = "Filled"
 }
 
 /** A function value or value of method select */
@@ -316,7 +317,7 @@ abstract class FunctionValue extends SingleValue {
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "Function@" + hashCode
+  def show(setting: ShowSetting)(implicit ctx: Context): String = "Function@" + hashCode
 }
 
 /** A lazy value */
@@ -326,7 +327,7 @@ abstract class LazyValue extends Value {
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = "LazyValue@" + hashCode
+  def show(setting: ShowSetting)(implicit ctx: Context): String = "LazyValue@" + hashCode
 }
 
 /** A slice of an object */
@@ -392,7 +393,7 @@ class SliceValue(val id: Int) extends SingleValue {
     case _ => false
   }
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = heap(id).asSlice.show(printed)
+  def show(setting: ShowSetting)(implicit ctx: Context): String = setting.heap(id).asSlice.show(setting)
 }
 
 class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = false) extends SingleValue {
@@ -463,7 +464,8 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
     }
   }
 
-  def show(heap: Heap, printed: mutable.Set[Int])(implicit ctx: Context): String = {
-    slices.map { case (k, v) => "[" +k.show + "]" + v.show(heap, printed) }.mkString("{\n  ", "\n  ", "\n}")
+  def show(setting: ShowSetting)(implicit ctx: Context): String = {
+    val body = slices.map { case (k, v) => "[" +k.show + "]" + setting.indent(v.show(setting)) }.mkString("\n")
+    "Object {\n" + setting.indent(body) + "\n}"
   }
 }
