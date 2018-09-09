@@ -68,7 +68,9 @@ sealed trait Value {
     case (PartialValue, _) => NoValue
     case (_, PartialValue) => NoValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
-    case (m1: FunctionValue, m2: FunctionValue) => UnionValue(Set(m1, m2))
+    case (o1: ObjectValue, o2: ObjectValue) if o1 `eq` o2 => o1
+    case (m1: FunctionValue, m2: FunctionValue) =>
+      UnionValue(Set(m1, m2))
     case (o1: SliceValue, o2: SliceValue) =>
       if (o1.id == o2.id) o1
       else new UnionValue(Set(o1, o2))
