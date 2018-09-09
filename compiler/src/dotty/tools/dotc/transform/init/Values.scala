@@ -69,16 +69,7 @@ sealed trait Value {
     case (_, PartialValue) => NoValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
     case (o1: ObjectValue, o2: ObjectValue) if o1 `eq` o2 => o1
-    case (f1: FunctionValue, f2: FunctionValue) =>
-      new FunctionValue {
-        def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
-          val heap2 = heap.clone
-          val res1 = f1(values, argPos, pos, heap)
-          val res2 = f2(values, argPos, pos, heap2)
-          heap.join(heap2)
-          res1.join(res2)
-        }
-      }
+    case (f1: FunctionValue, f2: FunctionValue) => f1.join(f2)
     case (o1: SliceValue, o2: SliceValue) =>
       if (o1.id == o2.id) o1
       else new UnionValue(Set(o1, o2))
@@ -315,7 +306,7 @@ object FilledValue extends OpaqueValue {
 }
 
 /** A function value or value of method select */
-abstract class FunctionValue extends SingleValue {
+abstract class FunctionValue extends SingleValue { self =>
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res
 
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
@@ -328,6 +319,18 @@ abstract class FunctionValue extends SingleValue {
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
 
   def show(setting: ShowSetting)(implicit ctx: Context): String = "Function@" + hashCode
+
+  def join(that: FunctionValue): FunctionValue =
+    new FunctionValue {
+      def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+        val heap2 = heap.clone
+        val res1 = self(values, argPos, pos, heap)
+        val res2 = that(values, argPos, pos, heap2)
+        heap.join(heap2)
+        res1.join(res2)
+      }
+    }
+
 }
 
 /** A lazy value */
