@@ -41,8 +41,9 @@ trait Indexer { self: Analyzer =>
           ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
             env2.add(param.symbol, value = values(index))
           }
-
-          checking(ddef.symbol) { self.apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
+          val res = checking(ddef.symbol) { self.apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
+          if (res.hasErrors) res.effects = Vector(Call(ddef.symbol, res.effects, pos))
+          res
         }
     }
 
@@ -56,7 +57,9 @@ trait Indexer { self: Analyzer =>
         }
         else {
           val env2 = heap(env.id).asEnv
-          checking(vdef.symbol) { self.apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
+          val res = checking(vdef.symbol) { self.apply(vdef.rhs, env2)(ctx.withOwner(vdef.symbol)) }
+          if (res.hasErrors) res.effects = Vector(Force(vdef.symbol, res.effects, pos))
+          res
         }
     }
 

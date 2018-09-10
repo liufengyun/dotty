@@ -22,7 +22,19 @@ import Effect._
 
 case class Res(var effects: Effects = Vector.empty, var value: Value = FullValue) {
   def +=(eff: Effect): Unit = effects = effects :+ eff
-  def ++=(effs: Effects) = effects ++= effs
+
+  def ++=(effs: Effects): Unit =
+    effects ++= effs
+
+  def +(eff: Effect): this.type = {
+    effects = effects :+ eff
+    this
+  }
+
+  def ++(effs: Effects): this.type = {
+    effects ++= effs
+    this
+  }
 
   def hasErrors  = effects.size > 0
 
@@ -63,9 +75,6 @@ sealed trait Effect {
     case UseAbstractDef(sym, pos)  =>
       ctx.warning(s"`@scala.annotation.init` is recommended for abstract $sym for safe initialization", sym.pos)
       ctx.warning(s"Reference to abstract $sym which should be annotated with `@scala.annotation.init`", pos)
-    case Latent(tree, effs)  =>
-      ctx.warning(s"Latent effects results in initialization errors", tree.pos)
-      effs.foreach(_.report)
     case Generic(msg, pos) =>
       ctx.warning(msg, pos)
   }
@@ -77,7 +86,6 @@ case class Call(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect
 case class Force(sym: Symbol, effects: Seq[Effect], pos: Position) extends Effect    // force lazy val results in error
 case class Instantiate(cls: Symbol, effs: Seq[Effect], pos: Position) extends Effect // create new instance of in-scope inner class results in error
 case class UseAbstractDef(sym: Symbol, pos: Position) extends Effect                 // use abstract def during initialization, see override5.scala
-case class Latent(tree: tpd.Tree, effs: Seq[Effect]) extends Effect                  // problematic latent effects (e.g. effects of closures)
 case class Generic(msg: String, pos: Position) extends Effect                        // generic problem
 
 object Effect {

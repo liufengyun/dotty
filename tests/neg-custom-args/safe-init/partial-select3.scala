@@ -3,7 +3,7 @@ class Foo {
 
   println(show)                // error
 
-  def show = println(name)     // error
+  def show = println(name)
 }
 
 

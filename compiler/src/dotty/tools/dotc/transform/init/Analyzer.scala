@@ -47,26 +47,15 @@ class Analyzer extends Indexer { analyzer =>
     val funSym = fun.symbol
     val funRes = apply(fun, env)
 
-    // reduce reported errors
-    if (funRes.hasErrors) return Res(effects = funRes.effects)
-
     val args = argss.flatten
-
-    // check params
-    var effs = Vector.empty[Effect]
-
     val values = args.map { arg =>
       val res = apply(arg, env)
-      effs = effs ++ res.effects
+      funRes ++= res.effects
       res.value
     }
 
-    if (effs.size > 0) return Res(effects = effs)
-
     indentedDebug(s">>> calling $funSym")
-    val res = funRes.value(values, args.map(_.pos), tree.pos, env.heap)
-    if (res.hasErrors) res.effects = Vector(Latent(tree, res.effects))
-    res
+    funRes.value(values, args.map(_.pos), tree.pos, env.heap) ++ funRes.effects
   }
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
@@ -246,7 +235,8 @@ class Analyzer extends Indexer { analyzer =>
     val obj = new ObjectValue(tree.tpe, init = false, open = false)
     val res = checkInit(obj.tp, tree.symbol, argss, env, obj, tree.pos)
     obj.init = true
-    res.value = obj
+    res.value = if (obj.slices.isEmpty) FullValue else obj
+    if (res.hasErrors) res.effects = Vector(Instantiate(tree.tpe.classSymbol, res.effects, tree.pos))
     res
   }
 

@@ -20,12 +20,12 @@ import collection.mutable
 //=======================================
 
 object Value {
-  def checkParams(paramInfos: List[Type], values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+  def checkParams(sym: Symbol, paramInfos: List[Type], values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
     paramInfos.zipWithIndex.foreach { case (tp, index: Int) =>
       val value = values(index)
       val pos = argPos(index)
       if (value.widen(heap, pos) < tp.value)
-        return Res(effects = Vector(Generic("Leak of object under initialization", pos)))
+        return Res(effects = Vector(Generic("Leak of object under initialization to " + sym.show, pos)))
     }
     Res()
   }
@@ -34,7 +34,7 @@ object Value {
     new FunctionValue() {
       def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
         val paramInfos = methSym.info.paramInfoss.flatten
-        checkParams(paramInfos, values, argPos, pos, heap)
+        checkParams(methSym, paramInfos, values, argPos, pos, heap)
       }
     }
   }
@@ -65,8 +65,8 @@ sealed trait Value {
     case (v, FullValue) => v
     case (NoValue, _) => NoValue
     case (_, NoValue) => NoValue
-    case (PartialValue, _) => NoValue
-    case (_, PartialValue) => NoValue
+    case (PartialValue, _) => PartialValue
+    case (_, PartialValue) => PartialValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
     case (o1: ObjectValue, o2: ObjectValue) if o1 `eq` o2 => o1
     case (f1: FunctionValue, f2: FunctionValue) => f1.join(f2)
@@ -77,6 +77,7 @@ sealed trait Value {
     case (uv: UnionValue, v: SingleValue) => uv + v
     case (v: SingleValue, uv: UnionValue) => uv + v
     case (v1: SingleValue, v2: SingleValue) => UnionValue(Set(v1, v2))
+    case (v1: LazyValue, v2: LazyValue) if v1 == v2 => v1
     case _ =>
       throw new Exception(s"Can't join $this and $other")
   }
@@ -195,12 +196,11 @@ object FullValue extends OpaqueValue {
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
     val cls = constr.owner.asClass
     val paramInfos = constr.info.paramInfoss.flatten
-    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    val res = Value.checkParams(cls, paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
     val args = (0 until paramInfos.size).map(values)
     if (args.exists(_.widen(heap, pos) < FullValue)) obj.add(cls, FilledValue)
-    else obj.add(cls, FullValue)
 
     Res()
   }
@@ -240,7 +240,7 @@ object PartialValue extends OpaqueValue {
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
     val paramInfos = constr.info.paramInfoss.flatten
-    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    val res = Value.checkParams(constr.owner, paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
     val cls = constr.owner.asClass
@@ -287,7 +287,7 @@ object FilledValue extends OpaqueValue {
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = {
     val paramInfos = constr.info.paramInfoss.flatten
-    val res = Value.checkParams(paramInfos, values, argPos, pos, heap)
+    val res = Value.checkParams(constr.owner, paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
     val cls = constr.owner.asClass
@@ -356,33 +356,26 @@ class SliceValue(val id: Int) extends SingleValue {
       if (value.isInstanceOf[LazyValue]) {
         val res = value(Nil, Nil, pos, heap)
         slice(sym) = res.value
-
-        if (res.hasErrors) Res(effects = Vector(Force(sym, res.effects, pos)))
-        else Res(value = res.value)
+        res
       }
       else Res(value = value)
     }
     else if (sym.is(Flags.Method)) {
       if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
-        val res2 = value(Nil, Nil, pos, heap)
-
-        if (res2.effects.nonEmpty)
-          res2.effects = Vector(Call(sym, res2.effects, pos))
-
-        res2
+        value(Nil, Nil, pos, heap)
       }
       else Res(value = value)
     }
     else {
-      var effs = Vector.empty[Effect]
-      if (value == NoValue) effs = effs :+ Uninit(sym, pos)
+      if (value == NoValue) Res(effects = Vector(Uninit(sym, pos)))
+      else {
+        val res = Res(value = value)
 
-      val res = Res(effects = effs, value = value)
+        if (sym.is(Flags.Deferred) && !sym.hasAnnotation(defn.InitAnnot))
+          res += UseAbstractDef(sym, pos)
 
-      if (sym.is(Flags.Deferred) && !sym.hasAnnotation(defn.InitAnnot))
-        res += UseAbstractDef(sym, pos)
-
-      res
+        res
+      }
     }
   }
 
@@ -432,6 +425,10 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
 
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val target = resolve(sym)
+
+    // select on self type
+    if (!target.exists) return PartialValue.select(sym, heap, pos)
+
     val cls = target.owner.asClass
     if (slices.contains(cls)) {
       val res = slices(cls).select(target, heap, pos)
@@ -468,7 +465,6 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
     val cls = constr.owner.asClass
     val outerCls = cls.owner.asClass
     if (slices.contains(outerCls)) {
-      if (this.widen(heap, pos) < FullValue) obj.add(cls, FilledValue)
       slices(outerCls).init(constr, values, argPos, pos, obj, heap, indexer)
     }
     else {

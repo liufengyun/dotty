@@ -9,7 +9,7 @@ class Child extends Parent {
 
   println(show)                // error
 
-  def show = println(name)     // error  // error
+  def show = println(name)     // error
 
   val name = "child"
 }

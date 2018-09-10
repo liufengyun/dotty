@@ -9,8 +9,6 @@ class Box(x: Int) {
   def f(m: Int) = m + a.size  // error
 }
 
-import scala.annotation.init
-
 class Boite(x: Int) {
   val y = x + 1
   val z = f(5)       // error
