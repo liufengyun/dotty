@@ -60,11 +60,7 @@ class Analyzer extends Indexer { analyzer =>
 
   def checkSelect(tree: Select, env: Env)(implicit ctx: Context): Res = {
     val prefixRes = apply(tree.qualifier, env)
-
-    // reduce reported errors
-    if (prefixRes.hasErrors) return Res(effects = prefixRes.effects)
-
-    prefixRes.value.select(tree.symbol, env.heap, tree.pos)
+    prefixRes.value.select(tree.symbol, env.heap, tree.pos) ++ prefixRes.effects
   }
 
   private def enclosedIn(curSym: Symbol, inSym: Symbol)(implicit ctx: Context): Boolean =
