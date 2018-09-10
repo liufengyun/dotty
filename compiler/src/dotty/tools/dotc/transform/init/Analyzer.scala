@@ -175,6 +175,8 @@ class Analyzer extends Indexer { analyzer =>
 
   /** Check a parent call */
   def checkInit(tp: Type, init: Symbol, argss: List[List[Tree]], env: Env, obj: ObjectValue, pos: Position)(implicit ctx: Context): Res = {
+    if (!init.exists) return Res()
+
     val cls = init.owner.asClass
     val args = argss.flatten
 

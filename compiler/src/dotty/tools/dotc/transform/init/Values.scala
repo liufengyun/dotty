@@ -22,8 +22,8 @@ import collection.mutable
 object Value {
   def checkParams(sym: Symbol, paramInfos: List[Type], values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
     paramInfos.zipWithIndex.foreach { case (tp, index: Int) =>
-      val value = values(index)
-      val pos = argPos(index)
+      val value = scala.util.Try(values(index)).getOrElse(FullValue)
+      val pos = scala.util.Try(argPos(index)).getOrElse(NoPosition)
       if (value.widen(heap, pos) < tp.value)
         return Res(effects = Vector(Generic("Leak of object under initialization to " + sym.show, pos)))
     }
@@ -185,7 +185,7 @@ abstract sealed class OpaqueValue extends SingleValue {
 
 object FullValue extends OpaqueValue {
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res =
-    if (sym.is(Flags.Method) && sym.info.paramNamess.flatten.nonEmpty) Res(value = Value.defaultFunctionValue(sym))
+    if (sym.is(Flags.Method) && sym.info.paramNamess.nonEmpty) Res(value = Value.defaultFunctionValue(sym))
     else Res()
 
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res =
@@ -199,7 +199,7 @@ object FullValue extends OpaqueValue {
     val res = Value.checkParams(cls, paramInfos, values, argPos, pos, heap)
     if (res.hasErrors) return res
 
-    val args = (0 until paramInfos.size).map(values)
+    val args = (0 until paramInfos.size).map(i => scala.util.Try(values(i)).getOrElse(FullValue))
     if (args.exists(_.widen(heap, pos) < FullValue)) obj.add(cls, FilledValue)
 
     Res()
