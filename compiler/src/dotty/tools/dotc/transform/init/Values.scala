@@ -110,6 +110,7 @@ sealed trait Value {
           if (v == PartialValue) return PartialValue
           else acc.join(recur(v))
         }
+      case NoValue => PartialValue
       case _ => // impossible
         ???
     }
