@@ -1,5 +1,5 @@
 class Foo {
-  def b = {                     // error: @init
+  def b = {
     name.size                   // error
     lazy val m = name.size      // error: triggered from forcing `m`
     def bar = name.size         // error: triggered from calling `bar`

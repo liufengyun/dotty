@@ -1,7 +1,7 @@
 class X {
   object A {                         // error
     name.size                        // error
-    def foo: Int = name.size
+    def foo: Int = name.size         // error
     def bar: Int = 10
   }
 
@@ -15,7 +15,7 @@ class X {
 class Y {
   class A {
     name.size                        // error
-    def foo: Int = name.size
+    def foo: Int = name.size         // error
     def bar: Int = 10
   }
 

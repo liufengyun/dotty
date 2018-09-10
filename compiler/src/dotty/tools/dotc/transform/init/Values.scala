@@ -185,7 +185,7 @@ abstract sealed class OpaqueValue extends SingleValue {
 
 object FullValue extends OpaqueValue {
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res =
-    if (sym.is(Flags.Method)) Res(value = Value.defaultFunctionValue(sym))
+    if (sym.is(Flags.Method) && sym.info.paramNamess.flatten.nonEmpty) Res(value = Value.defaultFunctionValue(sym))
     else Res()
 
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res =
@@ -434,7 +434,7 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
       val res = slices(cls).select(target, heap, pos)
       // ignore field access, but field access in Scala
       // are method calls, thus is unsafe as well
-      if (open && (target.is(Flags.Method) || target.is(Flags.Lazy)) &&
+      if (open && target.is(Flags.Method, butNot = Flags.Lazy) &&
           !target.hasAnnotation(defn.PartialAnnot) &&
           !target.hasAnnotation(defn.FilledAnnot) &&
           !target.isEffectivelyFinal)
