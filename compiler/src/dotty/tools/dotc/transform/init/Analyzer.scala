@@ -68,7 +68,7 @@ class Analyzer extends Indexer { analyzer =>
   private def enclosedIn(curSym: Symbol, inSym: Symbol)(implicit ctx: Context): Boolean =
     curSym.exists && ((curSym `eq` inSym) || (enclosedIn(curSym.owner, inSym)))
 
-  def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = tp match {
+  def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = trace("checking " + tp.show, env)(tp match {
     case tp : TermRef if tp.symbol.is(Module) && enclosedIn(ctx.owner, tp.symbol.moduleClass) =>
       // self reference by name: object O { ... O.xxx }
       checkRef(ThisType.raw(ctx.owner.typeRef), env, pos)
@@ -80,11 +80,17 @@ class Analyzer extends Indexer { analyzer =>
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
       if (cls.is(Package)) Res() // Dotty represents package path by ThisType
-      else Res(value = env(cls))
+      else if (env.contains(cls)) Res(value = env(cls))
+      else {
+        // ThisType used outside of class scope, can happen for objects
+        // see tests/pos/t2712-7.scala
+        assert(cls.is(Flags.Module) && !enclosedIn(ctx.owner, cls))
+        Res()
+      }
     case tp @ SuperType(thistpe, supertpe) =>
       // TODO : handle `supertpe`
       checkRef(thistpe, env, pos)
-  }
+  })
 
   def checkClosure(sym: Symbol, tree: Tree, env: Env)(implicit ctx: Context): Res = {
     if (env.contains(sym)) Res(value = env(sym)) else Res()
