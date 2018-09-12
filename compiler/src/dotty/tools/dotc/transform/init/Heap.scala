@@ -99,6 +99,9 @@ class Heap extends Cloneable {
     }
     this
   }
+
+  def show: String =
+    _entries.keys.mkString("[", ", ", "]")
 }
 
 //=======================================

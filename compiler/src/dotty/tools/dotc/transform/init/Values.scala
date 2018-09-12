@@ -31,7 +31,9 @@ object Value {
   }
 
   def defaultFunctionValue(methSym: Symbol)(implicit ctx: Context): Value = {
-    new FunctionValue() {
+    assert(methSym.is(Flags.Method))
+    if (methSym.info.paramNamess.isEmpty) FullValue
+    else new FunctionValue() {
       def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
         val paramInfos = methSym.info.paramInfoss.flatten
         checkParams(methSym, paramInfos, values, argPos, pos, heap)
@@ -87,35 +89,39 @@ sealed trait Value {
    *  Widening is needed at analysis boundary.
    */
   def widen(heap: Heap, pos: Position)(implicit ctx: Context): OpaqueValue = {
-    val testHeap = heap.clone
-    def recur(value: Value): OpaqueValue = value match {
+    def recur(value: Value, heap: Heap): OpaqueValue = value match {
       case ov: OpaqueValue => ov
       case fv: FunctionValue =>
+        val testHeap = heap.clone
         val res = fv(i => FullValue, i => NoPosition, pos, testHeap)
         if (res.hasErrors) FilledValue
-        else recur(res.value)
+        else recur(res.value, testHeap)
       case sv: SliceValue =>
         val slice = heap(sv.id).asSlice
         if (slice.classInfos.nonEmpty) FilledValue
-        else slice.symbols.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
-          v.widen(heap, pos).join(acc)
-        }
+        else if (slice.symbols.isEmpty) FullValue
+        else FilledValue
+        // else slice.symbols.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
+        //   if (acc != FullValue) return FilledValue
+        //   v.widen(heap, pos).join(acc)
+        // }
       case ov: ObjectValue =>
         if (!ov.init) PartialValue
         else ov.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
-          v.widen(heap, pos).join(acc)
+          if (acc != FullValue) return FilledValue
+          recur(v, heap).join(acc)
         }
       case UnionValue(vs) =>
         vs.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
-          if (v == PartialValue) return PartialValue
-          else acc.join(recur(v))
+          if (v == PartialValue || acc == PartialValue) return PartialValue
+          else acc.join(recur(v, heap))
         }
       case NoValue => PartialValue
       case _ => // impossible
         ???
     }
 
-    recur(this)
+    recur(this, heap)
   }
 }
 
@@ -186,7 +192,7 @@ abstract sealed class OpaqueValue extends SingleValue {
 
 object FullValue extends OpaqueValue {
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res =
-    if (sym.is(Flags.Method) && sym.info.paramNamess.nonEmpty) Res(value = Value.defaultFunctionValue(sym))
+    if (sym.is(Flags.Method)) Res(value = Value.defaultFunctionValue(sym))
     else Res()
 
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res =
@@ -418,7 +424,10 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
   // handle dynamic dispatch
   private def resolve(sym: Symbol)(implicit ctx: Context): Symbol = {
     if (sym.isClass || sym.isConstructor || sym.isEffectivelyFinal || sym.is(Flags.Private)) sym
-    else sym.matchingMember(tp)
+    else {
+      // the method may crash, see tests/pos/t7517.scala
+      try sym.matchingMember(tp) catch { case _: Throwable => NoSymbol }
+    }
   }
 
   /** not supported, impossible to apply an object value */
@@ -443,22 +452,26 @@ class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = f
       res
     }
     else {
-      // two cases: (1) select on unknown super; (2) select on self annotation
-      if (target.isDefinedOn(tp)) FilledValue.select(target, heap, pos)
-      else PartialValue.select(target, heap, pos)
+      // select on unknown super
+      assert (target.isDefinedOn(tp))
+      FilledValue.select(target, heap, pos)
     }
   }
 
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val target = resolve(sym)
+
+    // select on self type
+    if (!target.exists) return PartialValue.assign(sym, value, heap, pos)
+
     val cls = target.owner.asClass
     if (slices.contains(cls)) {
       slices(cls).assign(target, value, heap, pos)
     }
     else {
-      // two cases: (1) select on unknown super; (2) select on self annotation
-      if (target.isDefinedOn(tp)) FilledValue.assign(target, value, heap, pos)
-      else PartialValue.assign(target, value, heap, pos)
+      // select on unknown super
+      assert(target.isDefinedOn(tp))
+      FilledValue.assign(target, value, heap, pos)
     }
   }
 

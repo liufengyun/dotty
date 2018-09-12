@@ -31,6 +31,7 @@ class Analyzer extends Indexer { analyzer =>
 
   def trace(msg: String, env: Env)(body: => Res)(implicit ctx: Context) = {
     indentedDebug(s"==> ${pad(msg)}?")
+    indentedDebug("heap = " + env.heap.show)
     indentedDebug(env.show(ShowSetting(env.heap)))
     depth += 1
     val res = body
@@ -71,7 +72,7 @@ class Analyzer extends Indexer { analyzer =>
   def checkRef(tp: Type, env: Env, pos: Position)(implicit ctx: Context): Res = trace("checking " + tp.show, env)(tp match {
     case tp : TermRef if tp.symbol.is(Module) && enclosedIn(ctx.owner, tp.symbol.moduleClass) =>
       // self reference by name: object O { ... O.xxx }
-      checkRef(ThisType.raw(ctx.owner.typeRef), env, pos)
+      checkRef(ThisType.raw(tp.symbol.moduleClass.typeRef), env, pos)
     case tp @ TermRef(NoPrefix, _) =>
       env.select(tp.symbol, pos)
     case tp @ TermRef(prefix, _) =>
