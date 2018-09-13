@@ -218,7 +218,7 @@ class Env(outerId: Int) extends HeapEntry {
       // How do we know the class/method/field does not capture/use a partial/filled outer?
       // If method/field exist, then the outer class beyond the method/field is full,
       // i.e. external methods/fields/classes are always safe.
-      Res()
+      FullValue.select(sym, this.heap, pos)
     }
 
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, indexer: Indexer)(implicit ctx: Context): Res = {
