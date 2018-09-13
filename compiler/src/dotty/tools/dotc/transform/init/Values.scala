@@ -316,9 +316,91 @@ object FilledValue extends OpaqueValue {
 abstract class FunctionValue extends SingleValue { self =>
   def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res
 
-  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
-    assert(sym.name.toString == "apply")
-    Res(value = this)
+  def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = sym.name match {
+    case nme.apply | nme.lift => Res(value = this)
+    case nme.compose =>
+      val selectedFun = new FunctionValue() {
+        def apply(fun: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+          val composedFun = new FunctionValue() {
+            def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+              val arg = values(0)
+              val applySym = defn.FunctionClass(1).typeRef.member(nme.apply).symbol
+              val res1 = fun(0).select(applySym, heap, pos)
+              val res2 = res1.value.apply(arg :: Nil, argPos, pos, heap)
+              val res3 = self.apply(res2.value :: Nil, argPos, pos, heap)
+              Res(value = res3.value, effects = res1.effects ++ res2.effects ++ res3.effects)
+            }
+          }
+          Res(value = composedFun)
+        }
+      }
+      Res(value = selectedFun)
+    case nme.andThen =>
+      val selectedFun = new FunctionValue() {
+        def apply(fun: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+          val composedFun = new FunctionValue() {
+            def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+              val arg = values(0)
+              val res1 = self.apply(arg :: Nil, argPos, pos, heap)
+              val applySym = defn.FunctionClass(1).typeRef.member(nme.apply).symbol
+              val res2 = fun(0).select(applySym, heap, pos)
+              val res3 = res2.value.apply(res2.value :: Nil, argPos, pos, heap)
+              Res(value = res3.value, effects = res1.effects ++ res2.effects ++ res3.effects)
+            }
+          }
+          Res(value = composedFun)
+        }
+      }
+      Res(value = selectedFun)
+    case nme.applyOrElse =>
+      val selectedFun = new FunctionValue() {
+        def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+          val arg = values(0)
+          val fun = values(1)
+          val res1 = self.apply(arg :: Nil, argPos, pos, heap)
+          val applySym = defn.FunctionClass(1).typeRef.member(nme.apply).symbol
+          val res2 = fun.select(applySym, heap, pos)
+          val res3 = res2.value.apply(arg :: Nil, argPos, pos, heap)
+          Res(value = res1.value.join(res3.value), effects = res1.effects ++ res2.effects ++ res3.effects)
+        }
+      }
+      Res(value = selectedFun)
+    case nme.runWith =>
+      val selectedFun = new FunctionValue() {
+        def apply(fun: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+          val composedFun = new FunctionValue() {
+            def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+              val arg = values(0)
+              val res1 = self.apply(arg :: Nil, argPos, pos, heap)
+              val applySym = defn.FunctionClass(1).typeRef.member(nme.apply).symbol
+              val res2 = fun(0).select(applySym, heap, pos)
+              val res3 = res2.value.apply(res2.value :: Nil, argPos, pos, heap)
+              Res(value = FullValue, effects = res1.effects ++ res2.effects ++ res3.effects)
+            }
+          }
+          Res(value = composedFun)
+        }
+      }
+      Res(value = selectedFun)
+    case nme.orElse =>
+      val selectedFun = new FunctionValue() {
+        def apply(fun: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+          val composedFun = new FunctionValue() {
+            def apply(values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
+              val arg = values(0)
+              val res1 = self.apply(arg :: Nil, argPos, pos, heap)
+              val applySym = defn.FunctionClass(1).typeRef.member(nme.apply).symbol
+              val res2 = fun(0).select(applySym, heap, pos)
+              val res3 = res2.value.apply(arg :: Nil, argPos, pos, heap)
+              Res(value = res1.value.join(res3.value), effects = res1.effects ++ res2.effects ++ res3.effects)
+            }
+          }
+          Res(value = composedFun)
+        }
+      }
+      Res(value = selectedFun)
+    case _ =>
+      FullValue.select(sym, heap, pos)
   }
 
   /** not supported */
