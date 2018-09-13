@@ -126,11 +126,11 @@ trait Indexer { self: Analyzer =>
       slice.innerEnv.add(cls, obj)
 
       // call parent constructor
-      val res = checkParents(cls, tmpl.parents, slice.innerEnv, obj)
+      val res = checkParents(cls, tmpl.parents, slice.innerEnv, obj)(ctx.withOwner(cls.owner))
       if (res.hasErrors) return res
 
       // check current class body
-      res ++= checkStats(tmpl.body, slice.innerEnv).effects
+      res ++= checkStats(tmpl.body, slice.innerEnv)(ctx.withOwner(cls)).effects
       res
     }
   }
