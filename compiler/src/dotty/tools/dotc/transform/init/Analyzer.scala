@@ -218,6 +218,11 @@ class Analyzer extends Indexer { analyzer =>
     val res = parents.head match {
       case parent @ NewEx(tref, init, argss) =>
         checkInit(parent.tpe, init.symbol, argss, env, obj, parent.pos)
+      case Block(stats, parent @ NewEx(tref, init, argss)) =>
+        val newEnv = env.fresh()
+        indexStats(stats, newEnv)
+        val res = checkStats(stats, newEnv)
+        res ++ checkInit(parent.tpe, init.symbol, argss, newEnv, obj, parent.pos).effects
     }
 
     if (res.hasErrors) return res
