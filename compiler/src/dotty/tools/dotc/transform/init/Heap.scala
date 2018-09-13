@@ -203,12 +203,7 @@ class Env(outerId: Int) extends HeapEntry {
       }
       else if (sym.is(Flags.Method)) {
         if (sym.info.isInstanceOf[ExprType]) {       // parameter-less call
-          val res2 = value(Nil, Nil, pos, this.heap)
-
-          if (res2.effects.nonEmpty)
-            res2.effects = Vector(Call(sym, res2.effects, pos))
-
-          res2
+          value(Nil, Nil, pos, this.heap)
         }
         else Res(value = value)
       }

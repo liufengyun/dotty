@@ -158,8 +158,6 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     slice.notAssigned.foreach { sym =>
       if (!sym.is(Deferred)) ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
-
-    debug(root.toString)
   }
 
   def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {

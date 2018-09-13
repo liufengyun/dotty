@@ -242,9 +242,13 @@ class Analyzer extends Indexer { analyzer =>
     val obj = new ObjectValue(tree.tpe, init = false, open = false)
     val res = checkInit(obj.tp, tree.symbol, argss, env, obj, tree.pos)
     obj.init = true
-    res.value = if (obj.slices.isEmpty) FullValue else obj
-    if (res.hasErrors) res.effects = Vector(Instantiate(tree.tpe.classSymbol, res.effects, tree.pos))
-    res
+    if (obj.slices.isEmpty) {
+      res.copy(value = FullValue)
+    }
+    else {
+      if (res.hasErrors) res.effects = Vector(Instantiate(tree.tpe.classSymbol, res.effects, tree.pos))
+      res.copy(value = obj)
+    }
   }
 
   object NewEx {
