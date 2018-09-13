@@ -75,11 +75,11 @@ sealed trait Value {
     case (o1: SliceValue, o2: SliceValue) =>
       if (o1.id == o2.id) o1
       else new UnionValue(Set(o1, o2))
+    case (v1: LazyValue, v2: LazyValue) if v1 == v2 => v1
     case (v1: UnionValue, v2: UnionValue) => v1 ++ v2
     case (uv: UnionValue, v: SingleValue) => uv + v
     case (v: SingleValue, uv: UnionValue) => uv + v
     case (v1: SingleValue, v2: SingleValue) => UnionValue(Set(v1, v2))
-    case (v1: LazyValue, v2: LazyValue) if v1 == v2 => v1
     case _ =>
       throw new Exception(s"Can't join $this and $other")
   }
@@ -407,7 +407,9 @@ abstract class FunctionValue extends SingleValue { self =>
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
 
-  def show(setting: ShowSetting)(implicit ctx: Context): String = "Function@" + hashCode
+  def show(setting: ShowSetting)(implicit ctx: Context): String = toString
+
+  override def toString: String = "Function@" + hashCode
 
   def join(that: FunctionValue): FunctionValue =
     new FunctionValue {
@@ -423,13 +425,15 @@ abstract class FunctionValue extends SingleValue { self =>
 }
 
 /** A lazy value */
-abstract class LazyValue extends Value {
+abstract class LazyValue extends SingleValue {
   // not supported
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def assign(sym: Symbol, value: Value, heap: Heap, pos: Position)(implicit ctx: Context): Res = ???
   def init(constr: Symbol, values: List[Value], argPos: List[Position], pos: Position, obj: ObjectValue, heap: Heap, indexer: Indexer)(implicit ctx: Context): Res = ???
 
-  def show(setting: ShowSetting)(implicit ctx: Context): String = "LazyValue@" + hashCode
+  def show(setting: ShowSetting)(implicit ctx: Context): String = toString
+
+  override def toString: String = "LazyValue@" + hashCode
 }
 
 /** A slice of an object */
