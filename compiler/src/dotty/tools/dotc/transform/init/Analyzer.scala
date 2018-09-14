@@ -29,7 +29,7 @@ class Analyzer extends Indexer { analyzer =>
 
   var depth: Int = 0
 
-  def trace(msg: String, env: Env)(body: => Res)(implicit ctx: Context) = {
+  def trace(msg: => String, env: Env)(body: => Res)(implicit ctx: Context) = {
     indentedDebug(s"==> ${pad(msg)}?")
     indentedDebug("heap = " + env.heap.show)
     indentedDebug(env.show(ShowSetting(env.heap)))
@@ -42,7 +42,7 @@ class Analyzer extends Indexer { analyzer =>
 
   def pad(s: String, padFirst: Boolean = false) = ShowSetting.pad(s, depth, padFirst)
 
-  def indentedDebug(msg: String) = debug(ShowSetting.pad(msg, depth, padFirst = true))
+  def indentedDebug(msg: => String) = debug(ShowSetting.pad(msg, depth, padFirst = true))
 
   def checkApply(tree: tpd.Tree, fun: Tree, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val funSym = fun.symbol
