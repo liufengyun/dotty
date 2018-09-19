@@ -71,6 +71,7 @@ sealed trait Value {
     case (_, PartialValue) => PartialValue
     case (v1: OpaqueValue, v2: OpaqueValue)     => v1.join(v2)
     case (o1: ObjectValue, o2: ObjectValue) if o1 `eq` o2 => o1
+    case (f1: FunctionValue, f2: FunctionValue) if f1 `eq` f2 => f1
     case (f1: FunctionValue, f2: FunctionValue) => f1.join(f2)
     case (o1: SliceValue, o2: SliceValue) =>
       if (o1.id == o2.id) o1
