@@ -14,6 +14,7 @@ import Decorators._
 import util.Positions._
 import config.Printers.init.{ println => debug }
 import collection.mutable
+import annotation.internal.sharable
 
 //=======================================
 //           Heap / Env
@@ -30,7 +31,7 @@ trait HeapEntry extends Cloneable {
 }
 
 object Heap {
-  private var _uniqueId = 0
+  @sharable private var _uniqueId = 0
   def uniqueId: Int = {
     _uniqueId += 1
     _uniqueId
