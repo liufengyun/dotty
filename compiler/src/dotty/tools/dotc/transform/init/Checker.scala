@@ -137,7 +137,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
     // current class env needs special setup
     val root = Heap.createRootEnv
-    val obj = new ObjectValue(tp = cls.typeRef, open = !cls.is(Final))
+    val obj = new ObjectValue(tp = cls.typeRef, open = !cls.is(Final) && !cls.isAnonymousClass)
       // enhancement possible to check if there are actual children
       // and whether children are possible in other modules.
 

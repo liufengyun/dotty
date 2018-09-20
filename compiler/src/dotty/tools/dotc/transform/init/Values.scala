@@ -98,16 +98,10 @@ sealed trait Value {
         if (res.hasErrors) FilledValue
         else recur(res.value, testHeap)
       case sv: SliceValue =>
-        val slice = heap(sv.id).asSlice
-        if (slice.classInfos.nonEmpty) FilledValue
-        else if (slice.symbols.isEmpty) FullValue
-        else FilledValue
-        // else slice.symbols.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
-        //   if (acc != FullValue) return FilledValue
-        //   v.widen(heap, pos).join(acc)
-        // }
+        heap(sv.id).asSlice.widen(pos)
       case ov: ObjectValue =>
         if (!ov.init) PartialValue
+        else if (ov.open) FilledValue
         else ov.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           if (acc != FullValue) return FilledValue
           recur(v, heap).join(acc)
