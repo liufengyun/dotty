@@ -100,8 +100,7 @@ sealed trait Value {
       case sv: SliceValue =>
         heap(sv.id).asSlice.widen(pos)
       case ov: ObjectValue =>
-        if (!ov.init) PartialValue
-        else if (ov.open) FilledValue
+        if (ov.open) FilledValue
         else ov.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
           if (acc != FullValue) return FilledValue
           recur(v, heap).join(acc)
@@ -490,7 +489,7 @@ class SliceValue(val id: Int) extends SingleValue {
   def show(setting: ShowSetting)(implicit ctx: Context): String = setting.heap(id).asSlice.show(setting)
 }
 
-class ObjectValue(val tp: Type, var init: Boolean = false, val open: Boolean = false) extends SingleValue {
+class ObjectValue(val tp: Type, val open: Boolean = false) extends SingleValue {
   /** slices of the object */
   private var _slices: Map[ClassSymbol, Value] = Map()
   def slices: Map[ClassSymbol, Value] = _slices

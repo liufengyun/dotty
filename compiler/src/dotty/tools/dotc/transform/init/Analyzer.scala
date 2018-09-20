@@ -244,9 +244,8 @@ class Analyzer extends Indexer { analyzer =>
   }
 
   def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
-    val obj = new ObjectValue(tree.tpe, init = false, open = false)
+    val obj = new ObjectValue(tree.tpe, open = false)
     val res = checkInit(obj.tp, tree.symbol, argss, env, obj, tree.pos)
-    obj.init = true
     if (obj.slices.isEmpty) {
       res.copy(value = FullValue)
     }
