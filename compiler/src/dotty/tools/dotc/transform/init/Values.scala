@@ -6,6 +6,7 @@ import core._
 import Contexts.Context
 import StdNames._
 import Names._
+import NameKinds.DefaultGetterName
 import ast._
 import Trees._
 import Symbols._
@@ -215,7 +216,7 @@ object PartialValue extends OpaqueValue {
     val res = Res(value = FullValue)
 
     if (sym.is(Flags.Method)) {
-      if (!sym.isPartial)
+      if (!sym.isPartial && !sym.name.is(DefaultGetterName))
         res += Generic(s"The $sym should be marked as `@partial` in order to be called", pos)
 
       res.value = Value.defaultFunctionValue(sym)
@@ -263,7 +264,7 @@ object FilledValue extends OpaqueValue {
   def select(sym: Symbol, heap: Heap, pos: Position)(implicit ctx: Context): Res = {
     val res = Res()
     if (sym.is(Flags.Method)) {
-      if (!sym.isPartial && !sym.isFilled)
+      if (!sym.isPartial && !sym.isFilled && !sym.name.is(DefaultGetterName))
         res += Generic(s"The $sym should be marked as `@partial` or `@filled` in order to be called", pos)
 
       res.value = Value.defaultFunctionValue(sym)
@@ -527,7 +528,8 @@ class ObjectValue(val tp: Type, val open: Boolean = false) extends SingleValue {
       if (open && target.is(Flags.Method, butNot = Flags.Lazy) &&
           !target.hasAnnotation(defn.PartialAnnot) &&
           !target.hasAnnotation(defn.FilledAnnot) &&
-          !target.isEffectivelyFinal)
+          !target.isEffectivelyFinal &&
+          !target.name.is(DefaultGetterName))
         res += OverrideRisk(target, pos)
       res
     }
