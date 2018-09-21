@@ -214,15 +214,22 @@ class Analyzer extends Indexer { analyzer =>
   def checkParents(cls: ClassSymbol, parents: List[Tree], env: Env, obj: ObjectValue)(implicit ctx: Context): Res = {
     if (cls.is(Trait)) return Res()
 
+    def blockInit(stats: List[Tree], parent: Tree, tref: TypeRef, init: Symbol, argss: List[List[Tree]]): Res = {
+      val newEnv = env.fresh()
+      indexStats(stats, newEnv)
+      val res = checkStats(stats, newEnv)
+      res ++ checkInit(parent.tpe, init, argss, newEnv, obj, parent.pos).effects
+    }
+
+
     // first call super class, see spec 5.1 about "Template Evaluation".
     val res = parents.head match {
       case parent @ NewEx(tref, init, argss) =>
-        checkInit(parent.tpe, init.symbol, argss, env, obj, parent.pos)
+        checkInit(parent.tpe, init, argss, env, obj, parent.pos)
       case Block(stats, parent @ NewEx(tref, init, argss)) =>
-        val newEnv = env.fresh()
-        indexStats(stats, newEnv)
-        val res = checkStats(stats, newEnv)
-        res ++ checkInit(parent.tpe, init.symbol, argss, newEnv, obj, parent.pos).effects
+        blockInit(stats, parent, tref, init, argss)
+      case Apply(Block(stats, parent @ NewEx(tref, init, argss)), args) =>
+        blockInit(stats, Apply(parent, args), tref, init, argss :+ args)
     }
 
     if (res.hasErrors) return res
@@ -235,7 +242,7 @@ class Analyzer extends Indexer { analyzer =>
       val parentOpt = parents.find(_.tpe.classSymbol `eq` traitCls)
       parentOpt match {
         case Some(parent @ NewEx(tref, init, argss)) =>
-          checkInit(parent.tpe, init.symbol, argss, env, obj, parent.pos).join(acc)
+          checkInit(parent.tpe, init, argss, env, obj, parent.pos).join(acc)
         case _ =>
           val tp = obj.tp.baseType(traitCls)
           checkInit(tp, traitCls.primaryConstructor, Nil, env, obj, cls.pos).join(acc)
@@ -243,9 +250,9 @@ class Analyzer extends Indexer { analyzer =>
     }
   }
 
-  def checkNew(tree: Tree, tref: TypeRef, init: TermRef, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
+  def checkNew(tree: Tree, tref: TypeRef, init: Symbol, argss: List[List[Tree]], env: Env)(implicit ctx: Context): Res = {
     val obj = new ObjectValue(tree.tpe, open = false)
-    val res = checkInit(obj.tp, tree.symbol, argss, env, obj, tree.pos)
+    val res = checkInit(obj.tp, init, argss, env, obj, tree.pos)
     if (obj.slices.isEmpty) {
       res.copy(value = FullValue)
     }
@@ -261,12 +268,12 @@ class Analyzer extends Indexer { analyzer =>
       case AppliedType(tref: TypeRef, targs) => tref
     }
 
-    def unapply(tree: tpd.Tree)(implicit ctx: Context): Option[(TypeRef, TermRef, List[List[tpd.Tree]])] = {
+    def unapply(tree: tpd.Tree)(implicit ctx: Context): Option[(TypeRef, Symbol, List[List[tpd.Tree]])] = {
       val (fn, targs, vargss) = tpd.decomposeCall(tree)
       if (!fn.symbol.isConstructor || !tree.isInstanceOf[tpd.Apply]) None
       else {
         val Select(New(tpt), _) = fn
-        Some((extract(tpt.tpe),  fn.tpe.asInstanceOf[TermRef], vargss))
+        Some((extract(tpt.tpe),  fn.symbol, vargss))
       }
     }
   }
