@@ -57,6 +57,7 @@ class Compiler {
 
   /** Phases dealing with the transformation from pickled trees to backend trees */
   protected def transformPhases: List[List[Phase]] =
+    List(new init.Checker) ::        // Check safe initialization of class fields
     List(new FirstTransform,         // Some transformations to put trees into a canonical form
          new CheckReentrant,         // Internal use only: Check that compiled program has no data races involving global vars
          new ElimPackagePrefixes,    // Eliminate references to package prefixes in Select nodes
@@ -72,7 +73,6 @@ class Compiler {
          new LiftTry,                // Put try expressions that might execute on non-empty stacks into their own methods
          new HoistSuperArgs,         // Hoist complex arguments of supercalls to enclosing scope
          new ClassOf,                // Expand `Predef.classOf` calls.
-         new init.Checker,           // Check safe initialization of class fields
          new RefChecks) ::           // Various checks mostly related to abstract members and overriding
     List(new TryCatchPatterns,       // Compile cases in try/catch
          new PatternMatcher,         // Compile pattern matches

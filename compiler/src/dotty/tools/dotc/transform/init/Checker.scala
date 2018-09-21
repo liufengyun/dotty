@@ -76,7 +76,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val cls = ctx.owner.asClass
     val self = cls.thisType
 
-    // ignore init checking if there are errors or `@unchecked`
+    // ignore init checking if `@unchecked`
     if (cls.hasAnnotation(defn.UncheckedAnnot)) return tree
 
     def lateInitMsg(sym: Symbol) =

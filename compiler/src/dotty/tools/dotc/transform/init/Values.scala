@@ -520,6 +520,8 @@ class ObjectValue(val tp: Type, val open: Boolean = false) extends SingleValue {
     // select on self type
     if (!target.exists) return PartialValue.select(sym, heap, pos)
 
+    if (this.widen(heap, pos) == FullValue) return FullValue.select(sym, heap, pos)
+
     val cls = target.owner.asClass
     if (slices.contains(cls)) {
       val res = slices(cls).select(target, heap, pos)
