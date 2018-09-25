@@ -35,6 +35,9 @@ package object init {
     def isPartial(implicit ctx: Context) = sym.hasAnnotation(defn.PartialAnnot)
     def isFilled(implicit ctx: Context) = sym.hasAnnotation(defn.FilledAnnot)
     def isInit(implicit ctx: Context) = sym.hasAnnotation(defn.InitAnnot)
+    def isOverride(implicit ctx: Context) =
+      (sym.is(Method) && sym.allOverriddenSymbols.exists(sym => sym.isPartial || sym.isFilled)) ||
+      (sym.is(Lazy) && sym.allOverriddenSymbols.exists(sym => sym.isPartial || sym.isFilled || sym.isInit))
 
     def isPrimaryConstructorFields(implicit ctx: Context) = sym.is(ParamAccessor)
 

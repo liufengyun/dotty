@@ -22,7 +22,7 @@ import collection.mutable
 
 object Value {
   def checkParams(sym: Symbol, paramInfos: List[Type], values: Int => Value, argPos: Int => Position, pos: Position, heap: Heap)(implicit ctx: Context): Res = {
-    paramInfos.zipWithIndex.foreach { case (tp, index: Int) =>
+    paramInfos.zipWithIndex.foreach { case (tp, index) =>
       val value = scala.util.Try(values(index)).getOrElse(FullValue)
       val pos = scala.util.Try(argPos(index)).getOrElse(NoPosition)
       if (value.widen(heap, pos) < tp.value)
@@ -82,21 +82,22 @@ sealed trait Value {
     case (uv: UnionValue, v: SingleValue) => uv + v
     case (v: SingleValue, uv: UnionValue) => uv + v
     case (v1: SingleValue, v2: SingleValue) => UnionValue(Set(v1, v2))
-    case _ =>
-      throw new Exception(s"Can't join $this and $other")
   }
 
   /** Widen the value to an opaque value
    *
    *  Widening is needed at analysis boundary.
    */
-  def widen(heap: Heap, pos: Position)(implicit ctx: Context): OpaqueValue = {
+  def widen(heap: Heap, pos: Position, handler: Vector[Effect] => Unit = effs => ())(implicit ctx: Context): OpaqueValue = {
     def recur(value: Value, heap: Heap): OpaqueValue = value match {
       case ov: OpaqueValue => ov
       case fv: FunctionValue =>
         val testHeap = heap.clone
         val res = fv(i => FullValue, i => NoPosition, pos, testHeap)
-        if (res.hasErrors) FilledValue
+        if (res.hasErrors) {
+          handler(res.effects)
+          FilledValue
+        }
         else recur(res.value, testHeap)
       case sv: SliceValue =>
         heap(sv.id).asSlice.widen(pos)
@@ -208,6 +209,8 @@ object FullValue extends OpaqueValue {
   }
 
   def show(setting: ShowSetting)(implicit ctx: Context): String = "Full"
+
+  override def toString = "full value"
 }
 
 object PartialValue extends OpaqueValue {
@@ -258,6 +261,8 @@ object PartialValue extends OpaqueValue {
   }
 
   def show(setting: ShowSetting)(implicit ctx: Context): String = "Partial"
+
+  override def toString = "partial value"
 }
 
 object FilledValue extends OpaqueValue {
@@ -305,6 +310,8 @@ object FilledValue extends OpaqueValue {
   }
 
   def show(setting: ShowSetting)(implicit ctx: Context): String = "Filled"
+
+  override def toString = "filled value"
 }
 
 /** A function value or value of method select */
@@ -528,8 +535,9 @@ class ObjectValue(val tp: Type, val open: Boolean = false) extends SingleValue {
       // ignore field access, but field access in Scala
       // are method calls, thus is unsafe as well
       if (open && target.is(Flags.Method, butNot = Flags.Lazy) &&
-          !target.hasAnnotation(defn.PartialAnnot) &&
-          !target.hasAnnotation(defn.FilledAnnot) &&
+          !target.isPartial &&
+          !target.isFilled &&
+          !target.isOverride &&
           !target.isEffectivelyFinal &&
           !target.name.is(DefaultGetterName))
         res += OverrideRisk(target, pos)

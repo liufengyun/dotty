@@ -47,31 +47,6 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
 
   override def phaseName: String = Checker.name
 
-  /*
-  override def transformDefDef(ddef: tpd.DefDef)(implicit ctx: Context): tpd.Tree = {
-    val sym = ddef.symbol
-    val overrideInit = sym.allOverriddenSymbols.exists(_.hasAnnotation(defn.PartialAnnot))
-
-    if (overrideInit ||sym.hasAnnotation(defn.PartialAnnot)) {
-      val cls = sym.owner.asClass
-      val root = createRootEnv
-
-      val classEnv = setupMethodEnv(root.newEnv, sym.owner.asClass, sym, isOverriding = overrideInit)
-      val thisInfo = new ObjectEnv(classEnv.id)
-
-      root.setPartialSyms(Set(cls))
-      root.setLatentSyms(Map(cls -> thisInfo))
-
-      val checker = new DataFlowChecker
-
-      val res = checker.apply(ddef.rhs, classEnv)
-      res.effects.foreach(_.report)
-      if (res.effects.nonEmpty) ctx.warning(s"init $sym may cause initialization problems", ddef.pos)
-    }
-
-    ddef
-  } */
-
   override def transformTemplate(tree: Template)(implicit ctx: Context): Tree = {
     val cls = ctx.owner.asClass
     val self = cls.thisType
@@ -122,7 +97,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
         if mbrd.info.overrides(tp, matchLoosely = true)
       } {
         val mbr = mbrd.symbol
-        if (mbr.owner.ne(cls) && !mbr.hasAnnotation(defn.PartialAnnot))
+        if (mbr.owner.ne(cls) && (!mbr.hasAnnotation(defn.PartialAnnot) && !mbr.hasAnnotation(defn.FilledAnnot) ))
           ctx.warning(invalidImplementMsg(mbr), cls.pos)
       }
     }
@@ -135,6 +110,9 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
   def checkInit(cls: ClassSymbol, tmpl: tpd.Template)(implicit ctx: Context) = {
     val analyzer = new Analyzer
 
+    // partial check
+    partialCheck(cls, tmpl, analyzer)
+
     // current class env needs special setup
     val root = Heap.createRootEnv
     val obj = new ObjectValue(tp = cls.typeRef, open = !cls.is(Final) && !cls.isAnonymousClass)
@@ -145,7 +123,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     root.addClassDef(cls, tmpl)
     indexOuter(cls, root)
 
-    // init object
+    // init check
     val constr = tmpl.constr
     val values = constr.vparamss.flatten.map { param => param.tpe.widen.value }
     val poss = constr.vparamss.flatten.map(_.pos)
@@ -158,7 +136,114 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     slice.notAssigned.foreach { sym =>
       if (!sym.is(Deferred)) ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
+
+    // filled check
+    filledCheck(obj, tmpl, root.heap)
   }
+
+  def partialCheck(cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {
+    val obj = new ObjectValue(tp = cls.typeRef, open = !cls.is(Final) && !cls.isAnonymousClass)
+      // enhancement possible to check if there are actual children
+      // and whether children are possible in other modules.
+
+    val root = Heap.createRootEnv
+    val heap = root.heap
+    val slice = root.newSlice(cls)
+    obj.add(cls, new SliceValue(slice.id))
+    analyzer.indexMembers(tmpl.body, slice)
+    slice.innerEnv.add(cls, obj)
+
+    tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index) =>
+      val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
+      if (sym.exists) slice.add(sym, sym.info.value)
+    }
+
+    def checkMethod(sym: Symbol): Unit = {
+      if (!sym.isPartial && !sym.isOverride) return
+
+      val heap2 = heap.clone
+      var effs: Vector[Effect] = Vector.empty
+      val res = obj.select(sym, heap2, NoPosition)
+      val value = res.value.widen(heap, NoPosition, es => res ++= es)
+      if (res.hasErrors) {
+        ctx.error("Calling a partial method causes errors", sym.pos)
+        res.effects.foreach(_.report)
+      }
+      if (value != FullValue) ctx.error("Partial method must return a full value", sym.pos)
+    }
+
+    def checkLazy(sym: Symbol): Unit = {
+      if (!sym.isPartial && !sym.isOverride) return
+
+      val heap2 = heap.clone
+      val res = obj.select(sym, heap2, NoPosition)
+      if (res.hasErrors) {
+        ctx.error("Forcing partial lazy value causes errors", sym.pos)
+        res.effects.foreach(_.report)
+      }
+      else {
+        val value = res.value.widen(heap2, NoPosition)
+        if (value != FullValue) ctx.error("Partial lazy value must return a full value", sym.pos)
+      }
+    }
+
+    tmpl.body.foreach {
+      case ddef: DefDef =>
+        checkMethod(ddef.symbol)
+      case vdef: ValDef if vdef.symbol.is(Lazy)  =>
+        checkLazy(vdef.symbol)
+      case _ =>
+    }
+  }
+
+  def filledCheck(obj: ObjectValue, tmpl: tpd.Template, heap: Heap)(implicit ctx: Context) = {
+    def checkMethod(sym: Symbol): Unit = {
+      if (sym.isPartial || sym.isOverride || !sym.isFilled) return
+
+      val res = obj.select(sym, heap, NoPosition)
+      val value = res.value.widen(heap, NoPosition, es => res ++= es)
+      if (res.hasErrors) {
+        ctx.error("Calling a filled method causes errors", sym.pos)
+        res.effects.foreach(_.report)
+      }
+      if (value != FullValue) ctx.error("Filled method must return a full value", sym.pos)
+    }
+
+    def checkLazy(sym: Symbol): Unit = {
+      if (sym.isPartial || sym.isOverride || !sym.isFilled) return
+
+      val res = obj.select(sym, heap, NoPosition)
+      if (res.hasErrors) {
+        ctx.error("Forcing filled lazy value causes errors", sym.pos)
+        res.effects.foreach(_.report)
+      }
+      else {
+        val value = res.value.widen(heap, NoPosition)
+        if (value != FullValue) ctx.error("Filled lazy value must return a full value", sym.pos)
+      }
+    }
+
+    def checkValDef(sym: Symbol): Unit = {
+      val isOverride = sym.allOverriddenSymbols.exists(sym => sym.isInit)
+      val expected: OpaqueValue =
+        if (isOverride) FullValue
+        else sym.info.value
+
+      val actual = obj.select(sym, heap, NoPosition).value.widen(heap, NoPosition)
+      if (actual < expected) ctx.error(s"Found = $actual, expected = $expected" , sym.pos)
+    }
+
+    tmpl.body.foreach {
+      case ddef: DefDef if ddef.symbol.isFilled =>
+        checkMethod(ddef.symbol)
+      case vdef: ValDef if vdef.symbol.is(Lazy)  =>
+        checkLazy(vdef.symbol)
+      case vdef: ValDef =>
+        checkValDef(vdef.symbol)
+      case _ =>
+    }
+  }
+
 
   def indexOuter(cls: ClassSymbol, env: Env)(implicit ctx: Context) = {
     def recur(cls: Symbol, maxValue: OpaqueValue): Unit = if (cls.owner.exists) {

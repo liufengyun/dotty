@@ -38,7 +38,7 @@ trait Indexer { self: Analyzer =>
         else {
           val env2 = env.fresh(heap)
 
-          ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+          ddef.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index) =>
             env2.add(param.symbol, value = values(index))
           }
           val res = checking(ddef.symbol) { self.apply(ddef.rhs, env2)(ctx.withOwner(ddef.symbol)) }
@@ -116,7 +116,7 @@ trait Indexer { self: Analyzer =>
       indexMembers(tmpl.body, slice)
 
       // propagate constructor arguments
-      tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index: Int) =>
+      tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index) =>
         val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
         if (sym.exists) slice.add(sym, values(index))
         slice.innerEnv.add(param.symbol, values(index))
