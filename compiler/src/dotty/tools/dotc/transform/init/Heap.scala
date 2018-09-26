@@ -306,18 +306,17 @@ class SliceRep(val cls: ClassSymbol, innerEnvId: Int) extends HeapEntry with Clo
     s"\n id: $id($innerEnvId)\n${setting.indent(members, tabs = 1)}"
   }
 
-  def widen(pos: Position)(implicit ctx: Context): OpaqueValue = {
+  def widen(implicit ctx: Context): OpaqueValue = {
     def isPartialOrFilled(value: Value): Boolean =
       value == PartialValue || value == FilledValue
 
-    if (classInfos.nonEmpty) FilledValue
-    else if (symbols.exists { case (sym, value) => sym.isField && value == NoValue }) PartialValue
-    else if (symbols.exists { case (sym, value) => sym.isField && isPartialOrFilled(value) }) FilledValue
+    if (symbols.exists { case (sym, value) => sym.isField && value == NoValue }) PartialValue
+    else if (symbols.exists { case (sym, value) => sym.isField && (sym.info.isPartial || sym.info.isFilled) }) FilledValue
     else {
       // check outer
       val owner = cls.owner
       if (!owner.isClass) FullValue
-      else innerEnv(owner).widen(heap, pos)
+      else innerEnv(owner).widen(heap, NoPosition)
     }
   }
 }

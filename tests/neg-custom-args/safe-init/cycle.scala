@@ -1,5 +1,7 @@
+import scala.annotation.filled
+
 class Parent {
-  val child = new Child(this)
+  val child: Child @filled = new Child(this)
   child.show   // error
 
   val name = "parent"

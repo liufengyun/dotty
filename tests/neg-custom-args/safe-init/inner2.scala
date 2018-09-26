@@ -1,3 +1,5 @@
+import scala.annotation.filled
+
 class Foo {
   val list = List(1, 2, 3)
 
@@ -5,7 +7,7 @@ class Foo {
     val len = list.size
   }
 
-  val bar = new Bar(this)
+  val bar: Bar @filled = new Bar(this)
   new bar.Inner            // error
 }
 

@@ -1,5 +1,5 @@
 class Foo {
-  val bar = new Bar(this)
+  val bar = new Bar(this) // error
   var x: bar.Inner = _   // ok, partial value as type prefix
 
   class Inner {

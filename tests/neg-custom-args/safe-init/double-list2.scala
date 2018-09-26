@@ -1,5 +1,7 @@
+import scala.annotation.filled
+
 class List {
-  val sentinel: Node = new Node(null, null, this, null)
+  val sentinel: Node @filled = new Node(null, null, this, null)
 
   def insert(data: AnyRef) = sentinel.insertAfter(data)
 }

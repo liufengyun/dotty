@@ -1,12 +1,14 @@
+import scala.annotation.filled
+
 class Foo {
-  val bar = new Bar(this)
+  val bar = new Bar(this)  // error
   new bar.Inner            // error
 
   new this.Inner           // error, as Inner access `this.list`
 
   val list = List(1, 2, 3)
 
-  val inner = new this.Inner // ok, `list` is instantiated
+  val inner: Inner @filled = new this.Inner // ok, `list` is instantiated
 
   val name = "good"
 

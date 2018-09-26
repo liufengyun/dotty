@@ -26,7 +26,7 @@ class Foo(x: Int) {
 
 
 class Bar(x: Int, m: Partial[String]) {
-  var from: String = _
+  var from: String = _    // error
   var to: String = _
   val message = "hello, world"
 

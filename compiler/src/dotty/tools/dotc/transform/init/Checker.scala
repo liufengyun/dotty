@@ -137,8 +137,8 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
       if (!sym.is(Deferred)) ctx.warning(s"field ${sym.name} is not initialized", sym.pos)
     }
 
-    // filled check
-    filledCheck(obj, tmpl, root.heap)
+    // filled check: try commit early
+    if (obj.open || slice.widen != FullValue) filledCheck(obj, tmpl, root.heap)
   }
 
   def partialCheck(cls: ClassSymbol, tmpl: tpd.Template, analyzer: Analyzer)(implicit ctx: Context) = {

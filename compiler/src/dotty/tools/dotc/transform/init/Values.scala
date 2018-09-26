@@ -100,7 +100,7 @@ sealed trait Value {
         }
         else recur(res.value, testHeap)
       case sv: SliceValue =>
-        heap(sv.id).asSlice.widen(pos)
+        heap(sv.id).asSlice.widen
       case ov: ObjectValue =>
         if (ov.open) FilledValue
         else ov.slices.values.foldLeft(FullValue: OpaqueValue) { (acc, v) =>
@@ -112,7 +112,7 @@ sealed trait Value {
           if (v == PartialValue || acc == PartialValue) return PartialValue
           else acc.join(recur(v, heap))
         }
-      case NoValue => PartialValue
+      // case NoValue => NoValue
       case _ => // impossible
         ???
     }

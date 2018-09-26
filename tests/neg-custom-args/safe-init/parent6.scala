@@ -1,5 +1,7 @@
+import scala.annotation.filled
+
 trait Foo {
-  @scala.annotation.filled
+  @filled
   class A
 
   class B {
@@ -9,8 +11,9 @@ trait Foo {
   def foo(x: Int) = 5 + x
 }
 
+
 class Bar extends Foo {
-  val a = new A         // OK
+  val a: A @filled = new A         // OK
   val b = new B         // error
 
   override def foo(x: Int) = x + id
