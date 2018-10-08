@@ -84,6 +84,7 @@ object AbstractFile {
 abstract class AbstractFile extends Iterable[AbstractFile] {
 
   /** Returns the name of this abstract file. */
+  @scala.annotation.partial
   def name: String
 
   /** Returns the path of this abstract file. */

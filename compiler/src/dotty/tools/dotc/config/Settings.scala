@@ -255,45 +255,58 @@ object Settings {
     def processArguments(arguments: List[String], processAll: Boolean)(implicit ctx: Context): ArgsSummary =
       processArguments(ArgsSummary(ctx.settingsState, arguments, Nil, Nil), processAll, Nil)
 
+    @scala.annotation.filled
     def publish[T](settingf: Int => Setting[T]): Setting[T] = {
       val setting = settingf(_allSettings.length)
       _allSettings += setting
       setting
     }
 
+    @scala.annotation.filled
     def BooleanSetting(name: String, descr: String, initialValue: Boolean = false): Setting[Boolean] =
       publish(Setting(name, descr, initialValue))
 
+    @scala.annotation.filled
     def StringSetting(name: String, helpArg: String, descr: String, default: String): Setting[String] =
       publish(Setting(name, descr, default, helpArg))
 
+    @scala.annotation.filled
     def ChoiceSetting(name: String, helpArg: String, descr: String, choices: List[String], default: String): Setting[String] =
       publish(Setting(name, descr, default, helpArg, choices))
 
+    @scala.annotation.filled
     def IntSetting(name: String, descr: String, default: Int, range: Seq[Int] = Nil): Setting[Int] =
       publish(Setting(name, descr, default, choices = range))
 
+    @scala.annotation.filled
     def MultiStringSetting(name: String, helpArg: String, descr: String): Setting[List[String]] =
       publish(Setting(name, descr, Nil, helpArg))
 
+    @scala.annotation.filled
     def OutputSetting(name: String, helpArg: String, descr: String, default: AbstractFile): Setting[AbstractFile] =
       publish(Setting(name, descr, default, helpArg))
 
+    @scala.annotation.filled
     def PathSetting(name: String, descr: String, default: String): Setting[String] =
       publish(Setting(name, descr, default))
 
+    @scala.annotation.filled
     def PathSetting(name: String, helpArg: String, descr: String, default: String): Setting[String] =
       publish(Setting(name, descr, default, helpArg))
 
+    @scala.annotation.filled
     def PhasesSetting(name: String, descr: String, default: String = ""): Setting[List[String]] =
       publish(Setting(name, descr, if (default.isEmpty) Nil else List(default)))
 
+    @scala.annotation.filled
     def PrefixSetting(name: String, pre: String, descr: String): Setting[List[String]] =
       publish(Setting(name, descr, Nil, prefix = pre))
 
+    @scala.annotation.filled
     def VersionSetting(name: String, descr: String, default: ScalaVersion = NoScalaVersion): Setting[ScalaVersion] =
       publish(Setting(name, descr, default))
 
+    @scala.annotation.filled
     def OptionSetting[T: ClassTag](name: String, descr: String): Setting[Option[T]] =
       publish(Setting(name, descr, None, propertyClass = Some(implicitly[ClassTag[T]].runtimeClass)))
   }

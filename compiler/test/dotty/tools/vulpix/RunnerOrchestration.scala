@@ -33,6 +33,7 @@ import scala.collection.mutable
 trait RunnerOrchestration {
 
   /** The maximum amount of active runners, which contain a child JVM */
+  @scala.annotation.partial
   def numberOfSlaves: Int
 
   /** The maximum duration the child process is allowed to consume before
@@ -168,7 +169,7 @@ trait RunnerOrchestration {
         .start()
     }
 
-    private[this] val allRunners = List.fill(numberOfSlaves)(new Runner(createProcess))
+    private[this] val allRunners = List.fill(numberOfSlaves)(new Runner(createProcess): @unchecked)
     private[this] val freeRunners = mutable.Queue(allRunners: _*)
     private[this] val busyRunners = mutable.Set.empty[Runner]
 

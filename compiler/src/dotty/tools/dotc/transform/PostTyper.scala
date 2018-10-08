@@ -50,7 +50,7 @@ object PostTyper {
  *  mini-phase or subfunction of a macro phase equally well. But taken by themselves
  *  they do not warrant their own group of miniphases before pickling.
  */
-class PostTyper extends MacroTransform with IdentityDenotTransformer { thisPhase =>
+final class PostTyper extends MacroTransform with IdentityDenotTransformer { thisPhase =>
   import tpd._
 
   /** the following two members override abstract members in Transform */

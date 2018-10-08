@@ -22,6 +22,7 @@ abstract class Positioned extends Product {
  /** Destructively update `curPos` to given position. Also, set any missing
    *  positions in children.
    */
+  @scala.annotation.partial
   protected def setPos(pos: Position): Unit = {
     setPosUnchecked(pos)
     if (pos.exists) setChildPositions(pos.toSynthetic)
@@ -50,7 +51,7 @@ abstract class Positioned extends Product {
    *  any checks of consistency with - or updates of - other positions.
    *  Called from Unpickler when entering positions.
    */
-  private[dotc] def setPosUnchecked(pos: Position): Unit = curPos = pos
+  final private[dotc] def setPosUnchecked(pos: Position): Unit = curPos = pos
 
   /** If any children of this node do not have positions,
    *  fit their positions between the positions of the known subtrees
@@ -112,8 +113,15 @@ abstract class Positioned extends Product {
     }
   }
 
+  @scala.annotation.partial
+  def productArity: Int
+
+  @scala.annotation.partial
+  def productElement(n: Int): Any
+
   /** The initial, synthetic position. This is usually the union of all positioned children's positions.
    */
+  @scala.annotation.partial
   def initialPos: Position = {
     var n = productArity
     var pos = NoPosition

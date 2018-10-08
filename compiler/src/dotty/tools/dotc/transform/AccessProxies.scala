@@ -63,6 +63,7 @@ abstract class AccessProxies {
     if (accDefs.isEmpty) body else body ++ accDefs
   }
 
+  @scala.annotation.partial
   trait Insert {
     import ast.tpd._
 

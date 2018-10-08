@@ -6,11 +6,13 @@ import collection.immutable.BitSet
 import core.Decorators._
 
 abstract class TokensCommon {
+  @scala.annotation.partial
   def maxToken: Int
 
   type Token = Int
   type TokenSet = BitSet
 
+  @scala.annotation.partial
   def tokenRange(lo: Int, hi: Int): TokenSet = BitSet(lo to hi: _*)
 
   def showTokenDetailed(token: Int): String = debugString(token)
@@ -22,6 +24,7 @@ abstract class TokensCommon {
 
   val tokenString, debugString: Array[String] = new Array[String](maxToken + 1)
 
+  @scala.annotation.filled
   def enter(token: Int, str: String, debugStr: String = ""): Unit = {
     assert(tokenString(token) == null)
     tokenString(token) = str

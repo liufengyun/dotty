@@ -36,6 +36,7 @@ object NameKinds {
     type ThisInfo <: Info
 
     /** A simple info type; some subclasses of Kind define more refined versions */
+    @scala.annotation.partial
     class Info extends NameInfo { this: ThisInfo =>
       def kind: NameKind = self
       def mkString(underlying: TermName): String = self.mkString(underlying, this)
@@ -74,6 +75,7 @@ object NameKinds {
    */
   abstract class ClassifiedNameKind(tag: Int, val infoString: String) extends NameKind(tag) {
     type ThisInfo = Info
+    @scala.annotation.filled
     val info: Info = new Info
 
     /** Build a new name of this kind from an underlying name */
@@ -85,7 +87,7 @@ object NameKinds {
       case _ => None
     }
 
-    simpleNameKinds(tag) = this
+    simpleNameKinds(tag) = this: @unchecked
   }
 
   /** The kind of names that get formed by adding a prefix to an underlying name */
@@ -151,7 +153,7 @@ object NameKinds {
 
     def infoString: String = s"Qualified $separator"
 
-    qualifiedNameKinds(tag) = this
+    qualifiedNameKinds(tag) = this: @unchecked
   }
 
   /** An extractor for qualified names of an arbitrary kind */
@@ -188,7 +190,7 @@ object NameKinds {
       else -1
     }
 
-    numberedNameKinds(tag) = this
+    numberedNameKinds(tag) = this: @unchecked
   }
 
   /** An extractor for numbered names of arbitrary kind */
@@ -221,7 +223,7 @@ object NameKinds {
     def fresh(prefix: TypeName)(implicit ctx: Context): TypeName =
       fresh(prefix.toTermName).toTypeName
 
-    uniqueNameKinds(separator) = this
+    uniqueNameKinds(separator) = this: @unchecked
   }
 
   /** An extractor for unique names of arbitrary kind */

@@ -241,6 +241,7 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
     /** A flag signalling that the typechecking the application was so far successful */
     private[this] var _ok = true
 
+    @scala.annotation.filled
     def ok: Boolean = _ok
     def ok_=(x: Boolean): Unit = {
       assert(x || ctx.reporter.errorsReported || !ctx.typerState.isCommittable) // !!! DEBUG
@@ -250,6 +251,7 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
     /** The function's type after widening and instantiating polytypes
      *  with TypeParamRefs in constraint set
      */
+    @scala.annotation.partial
     lazy val methType: Type = liftedFunType.widen match {
       case funType: MethodType => funType
       case funType: PolyType => constrained(funType).resultType
@@ -266,12 +268,14 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
     /** The arguments re-ordered so that each named argument matches the
      *  same-named formal parameter.
      */
+    @scala.annotation.partial
     lazy val orderedArgs: List[Arg] =
       if (hasNamedArg(args))
         reorder(args.asInstanceOf[List[untpd.Tree]]).asInstanceOf[List[Arg]]
       else
         args
 
+    @scala.annotation.partial
     protected def init(): Unit = methType match {
       case methType: MethodType =>
         // apply the result type constraint, unless method type is dependent
@@ -292,6 +296,7 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
     }
 
     /** The application was successful */
+    @scala.annotation.filled
     def success: Boolean = ok
 
     protected def methodType: MethodType = methType.asInstanceOf[MethodType]
@@ -450,6 +455,7 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
     }
 
     /** Is `sym` a constructor of a Java-defined annotation? */
+    @scala.annotation.partial
     def isJavaAnnotConstr(sym: Symbol): Boolean =
       sym.is(JavaDefined) && sym.isConstructor && sym.owner.derivesFrom(defn.AnnotationClass)
 
@@ -620,12 +626,12 @@ trait Applications extends Compatibility { self: Typer with Dynamic =>
       ok = false
     }
 
-    def normalizedFun:  Tree = myNormalizedFun
+    final def normalizedFun: Tree = myNormalizedFun
 
     private def lifter(implicit ctx: Context) =
       if (methRef.symbol.hasDefaultParams) LiftComplex else LiftImpure
 
-    override def liftFun(): Unit =
+    final override def liftFun(): Unit =
       if (liftedDefs == null) {
         liftedDefs = new mutable.ListBuffer[Tree]
         myNormalizedFun = lifter.liftApp(liftedDefs, myNormalizedFun)

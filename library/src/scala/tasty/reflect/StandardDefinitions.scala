@@ -11,6 +11,7 @@ trait StandardDefinitions extends TastyCore {
   /** Defines standard symbols (and types via its base trait).
     *  @group API
     */
+  @scala.annotation.partial
   trait DefinitionsApi extends StandardTypes {
 
     /** The module symbol of root package `_root_`. */
@@ -167,6 +168,7 @@ trait StandardDefinitions extends TastyCore {
   /** Defines standard types.
     *  @group Definitions
     */
+  @scala.annotation.partial
   trait StandardTypes {
     /** The type of primitive type `Unit`. */
     def UnitType: Type

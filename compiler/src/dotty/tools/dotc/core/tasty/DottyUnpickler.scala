@@ -54,6 +54,7 @@ class DottyUnpickler(bytes: Array[Byte], mode: UnpickleMode = UnpickleMode.TopLe
   def unpickleTypeTree()(implicit ctx: Context): Tree =
     treeUnpickler.unpickleTypeTree()
 
+  @scala.annotation.partial
   protected def treeSectionUnpickler(posUnpicklerOpt: Option[PositionUnpickler], commentUnpicklerOpt: Option[CommentUnpickler]): TreeSectionUnpickler = {
     new TreeSectionUnpickler(posUnpicklerOpt, commentUnpicklerOpt)
   }

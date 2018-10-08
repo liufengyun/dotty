@@ -40,11 +40,11 @@ object Parsers {
   }
 
   @sharable object Location extends Enumeration {
-    val InParens, InBlock, InPattern, ElseWhere: Value = Value
+    val InParens, InBlock, InPattern, ElseWhere: Value = Value: @unchecked
   }
 
   @sharable object ParamOwner extends Enumeration {
-    val Class, Type, TypeParam, Def: Value = Value
+    val Class, Type, TypeParam, Def: Value = Value: @unchecked
   }
 
   private implicit class AddDeco(val buf: ListBuffer[Tree]) extends AnyVal {
@@ -848,6 +848,7 @@ object Parsers {
 
     /** RefinedType        ::=  WithType {Annotation | [nl] Refinement}
      */
+    @scala.annotation.filled
     val refinedType: () => Tree = () => refinedTypeRest(withType())
 
     def refinedTypeRest(t: Tree): Tree = {
@@ -907,6 +908,7 @@ object Parsers {
       }
     }
 
+    @scala.annotation.filled
     val handleSingletonType: Tree => Tree = t =>
       if (in.token == TYPE) {
         in.nextToken()
@@ -928,6 +930,7 @@ object Parsers {
 
     /** NamedTypeArg      ::=  id `=' Type
      */
+    @scala.annotation.filled
     val namedTypeArg: () => NamedArg = () => {
       val name = ident()
       accept(EQUALS)
@@ -961,6 +964,7 @@ object Parsers {
 
     /** FunArgType ::=  Type | `=>' Type
      */
+    @scala.annotation.filled
     val funArgType: () => Tree = () =>
       if (in.token == ARROW) atPos(in.skipToken()) { ByNameTypeTree(typ()) }
       else typ()
@@ -1122,6 +1126,7 @@ object Parsers {
      *                      | `:' Annotation {Annotation}
      *                      | `:' `_' `*'
      */
+    @scala.annotation.filled
     val exprInParens: () => Tree = () => expr(Location.InParens)
 
     def expr(): Tree = expr(Location.ElseWhere)
@@ -1345,6 +1350,7 @@ object Parsers {
 
     /** PrefixExpr   ::= [`-' | `+' | `~' | `!'] SimpleExpr
     */
+    @scala.annotation.filled
     val prefixExpr: () => Tree = () =>
       if (isIdent && nme.raw.isUnary(in.name)) {
         val start = in.offset
@@ -1603,6 +1609,7 @@ object Parsers {
    /** CaseClause         ::= ‘case’ Pattern [Guard] `=>' Block
     *  ImplicitCaseClause ::= ‘case’ PatVar [Ascription] [Guard] `=>' Block
     */
+    @scala.annotation.filled
     val caseClause: () => CaseDef = () => atPos(in.offset) {
       accept(CASE)
       CaseDef(pattern(), guard(), atPos(accept(ARROW)) { block() })
@@ -1610,6 +1617,7 @@ object Parsers {
 
     /** TypeCaseClause     ::= ‘case’ InfixType ‘=>’ Type [nl]
      */
+    @scala.annotation.filled
     val typeCaseClause: () => CaseDef = () => atPos(in.offset) {
       accept(CASE)
       CaseDef(infixType(), EmptyTree, atPos(accept(ARROW)) {
@@ -1623,6 +1631,7 @@ object Parsers {
 
     /**  Pattern           ::=  Pattern1 { `|' Pattern1 }
      */
+    @scala.annotation.filled
     val pattern: () => Tree = () => {
       val pat = pattern1()
       if (isIdent(nme.raw.BAR))
@@ -2049,6 +2058,7 @@ object Parsers {
         Import(t, Ident(nme.WILDCARD) :: Nil)
     }
 
+    @scala.annotation.filled
     val handleImport: Tree => Tree = { tree: Tree =>
       if (in.token == USCORE) Import(tree, importSelector() :: Nil)
       else if (in.token == LBRACE) Import(tree, inBraces(importSelectors()))
@@ -2392,6 +2402,7 @@ object Parsers {
 
     /** ConstrApp         ::=  SimpleType {ParArgumentExprs}
      */
+    @scala.annotation.filled
     val constrApp: () => Tree = () => {
       // Using Ident(nme.ERROR) to avoid causing cascade errors on non-user-written code
       val t = checkWildcard(annotType(), fallbackTree = Ident(nme.ERROR))

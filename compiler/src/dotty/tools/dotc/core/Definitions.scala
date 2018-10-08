@@ -44,7 +44,7 @@ object Definitions {
  *  So the branch is put on hold, until we have implicit functions, which will always
  *  automatically be dereferenced.
  */
-class Definitions {
+final class Definitions {
   import Definitions._
 
   private implicit var ctx: Context = _
@@ -1172,7 +1172,7 @@ class Definitions {
   // ----- primitive value class machinery ------------------------------------------
 
   /** This class would also be obviated by the implicit function type design */
-  class PerRun[T](generate: Context => T) {
+  class PerRun[T](generate: (Context => T)) {
     private[this] var current: RunId = NoRunId
     private[this] var cached: T = _
     def apply()(implicit ctx: Context): T = {

@@ -29,7 +29,7 @@ import StdNames._
 import dotty.tools.dotc.core.tasty.{TastyBuffer, TastyHeaderUnpickler}
 import dotty.tools.io._
 
-class GenBCode extends Phase {
+final class GenBCode extends Phase {
   def phaseName: String = GenBCode.name
   private val entryPoints = new mutable.HashSet[Symbol]()
   def registerEntryPoint(sym: Symbol): Unit = entryPoints += sym

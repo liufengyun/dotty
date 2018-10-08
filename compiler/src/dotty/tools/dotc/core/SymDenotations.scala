@@ -420,6 +420,7 @@ object SymDenotations {
     // ----- Tests -------------------------------------------------
 
     /** Is this denotation a type? */
+    @scala.annotation.partial
     override def isType: Boolean = name.isTypeName
 
     /** Is this denotation a class? */
@@ -772,7 +773,7 @@ object SymDenotations {
       isPackageObject ||
       isTerm && !is(MethodOrLazy, butNot = Label) && !isLocalDummy
 
-    def isSkolem: Boolean = name == nme.SKOLEM
+    final def isSkolem: Boolean = name == nme.SKOLEM
 
     def isInlineMethod(implicit ctx: Context): Boolean =
       is(InlineMethod, butNot = AccessorOrSynthetic)
@@ -1214,7 +1215,7 @@ object SymDenotations {
       case _ => false
     }
 
-    def assertNoSkolems(tp: Type): Unit =
+    final def assertNoSkolems(tp: Type): Unit =
       if (!this.isSkolem)
         assert(!hasSkolems(tp), s"assigning type $tp containing skolems to $this")
 
@@ -1973,7 +1974,8 @@ object SymDenotations {
     def sourceModule(implicit ctx: Context): Symbol = mySourceModuleFn(ctx)
     def moduleClass(implicit ctx: Context): Symbol = myModuleClassFn(ctx)
 
-    def withDecls(decls: Scope): this.type = { myDecls = decls; this }
+    @scala.annotation.filled
+    def withDecls(decls: Scope): this.type = { myDecls = decls; this: @unchecked }
     def withSourceModule(sourceModuleFn: Context => Symbol): this.type = { mySourceModuleFn = sourceModuleFn; this }
     def withModuleClass(moduleClassFn: Context => Symbol): this.type = { myModuleClassFn = moduleClassFn; this }
   }

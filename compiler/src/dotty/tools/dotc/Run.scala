@@ -39,6 +39,7 @@ class Run(comp: Compiler, ictx: Context) extends ImplicitRunInfo with Constraint
    *                 for type checking.
    *    imports      For each element of RootImports, an import context
    */
+  @scala.annotation.partial
   protected[this] def rootContext(implicit ctx: Context): Context = {
     ctx.initialize()(ctx)
     ctx.base.setPhasePlan(comp.phases)
@@ -56,7 +57,7 @@ class Run(comp: Compiler, ictx: Context) extends ImplicitRunInfo with Constraint
     ctx.initialize()(start) // re-initialize the base context with start
     def addImport(ctx: Context, refFn: () => TermRef) =
       ctx.fresh.setImportInfo(ImportInfo.rootImport(refFn)(ctx))
-    (start.setRun(this) /: defn.RootImportFns)(addImport)
+    (start.setRun(this: @unchecked) /: defn.RootImportFns)(addImport)
   }
 
   private[this] var compiling = false
@@ -66,6 +67,7 @@ class Run(comp: Compiler, ictx: Context) extends ImplicitRunInfo with Constraint
   /** The context created for this run */
   def runContext: Context = myCtx
 
+  @scala.annotation.filled
   protected[this] implicit def ctx: Context = myCtx
   assert(ctx.runId <= Periods.MaxPossibleRunId)
 

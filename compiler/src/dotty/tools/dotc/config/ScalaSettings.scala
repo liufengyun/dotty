@@ -8,7 +8,7 @@ import Settings.Setting
 
 class ScalaSettings extends Settings.SettingGroup {
 
-  protected def defaultClasspath: String = sys.env.getOrElse("CLASSPATH", ".")
+  final protected def defaultClasspath: String = sys.env.getOrElse("CLASSPATH", ".")
 
   /** Path related settings */
   val bootclasspath: Setting[String] = PathSetting("-bootclasspath", "Override location of bootstrap class files.", Defaults.scalaBootClassPath)

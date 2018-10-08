@@ -18,7 +18,10 @@ object Properties extends PropertiesTrait {
 }
 
 trait PropertiesTrait {
+  @scala.annotation.partial
   protected def propCategory: String      // specializes the remainder of the values
+
+  @scala.annotation.partial
   protected def pickJarBasedOn: Class[_]  // props file comes from jar containing this
 
   /** The name of the properties file */
@@ -55,9 +58,9 @@ trait PropertiesTrait {
   def envOrNone(name: String): Option[String]           = Option(System getenv name)
 
   // for values based on propFilename
-  def scalaPropOrElse(name: String, alt: String): String = scalaProps.getProperty(name, alt)
-  def scalaPropOrEmpty(name: String): String             = scalaPropOrElse(name, "")
-  def scalaPropOrNone(name: String): Option[String]      = Option(scalaProps.getProperty(name))
+  private def scalaPropOrElse(name: String, alt: String): String = scalaProps.getProperty(name, alt)
+  private def scalaPropOrEmpty(name: String): String             = scalaPropOrElse(name, "")
+  private def scalaPropOrNone(name: String): Option[String]      = Option(scalaProps.getProperty(name))
 
   /** Either the development or release version if known, otherwise
    *  the empty string.

@@ -74,7 +74,7 @@ class QuoteDriver extends Driver {
   }
 
   override def initCtx: Context = {
-    val ictx = contextBase.initialCtx
+    val ictx = contextBase.initialCtx: @unchecked
     ictx.settings.classpath.update(QuoteDriver.currentClasspath)(ictx)
     ictx
   }

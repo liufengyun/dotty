@@ -151,7 +151,8 @@ object Trees {
      *  modifications. Should be used only in special circumstances (we
      *  need it for printing trees with optional type info).
      */
-    final def hasType: Boolean = myTpe != null
+    @scala.annotation.partial
+    final def hasType: Boolean = (myTpe != null): @unchecked
 
     final def typeOpt: Type = myTpe match {
       case tp: Type => tp
@@ -180,6 +181,7 @@ object Trees {
     def isDef: Boolean = false
 
     /** Is this tree either the empty tree or the empty ValDef or an empty type ident? */
+    @scala.annotation.partial
     def isEmpty: Boolean = false
 
     /** Convert tree to a list. Gives a singleton list, except
@@ -802,7 +804,7 @@ object Trees {
       trees foreach (_.foreachInThicket(op))
   }
 
-  class EmptyValDef[T >: Untyped] extends ValDef[T](
+  final class EmptyValDef[T >: Untyped] extends ValDef[T](
     nme.WILDCARD, genericEmptyTree[T], genericEmptyTree[T]) with WithoutTypeOrPos[T] {
     myTpe = NoType.asInstanceOf[T]
     override def isEmpty: Boolean = true
@@ -936,10 +938,10 @@ object Trees {
 
     // ----- Auxiliary creation methods ------------------
 
-    def Thicket(trees: List[Tree]): Thicket = new Thicket(trees)
-    def Thicket(): Thicket = EmptyTree
-    def Thicket(x1: Tree, x2: Tree): Thicket = Thicket(x1 :: x2 :: Nil)
-    def Thicket(x1: Tree, x2: Tree, x3: Tree): Thicket = Thicket(x1 :: x2 :: x3 :: Nil)
+    final def Thicket(trees: List[Tree]): Thicket = new Thicket(trees)
+    final def Thicket(): Thicket = EmptyTree
+    final def Thicket(x1: Tree, x2: Tree): Thicket = Thicket(x1 :: x2 :: Nil)
+    final def Thicket(x1: Tree, x2: Tree, x3: Tree): Thicket = Thicket(x1 :: x2 :: x3 :: Nil)
     def flatTree(xs: List[Tree]): Tree = flatten(xs) match {
       case x :: Nil => x
       case ys => Thicket(ys)
@@ -956,6 +958,7 @@ object Trees {
      * These are exactly those methods that are overridden in TypedTreeCopier
      * so that they selectively retype themselves. Retyping needs a context.
      */
+    @scala.annotation.partial
     abstract class TreeCopier {
       def postProcess(tree: Tree, copied: untpd.Tree): copied.ThisTree[T]
       def postProcess(tree: Tree, copied: untpd.MemberDef): copied.ThisTree[T]

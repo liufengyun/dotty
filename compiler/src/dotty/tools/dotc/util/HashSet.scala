@@ -25,7 +25,7 @@ class HashSet[T >: Null <: AnyRef](powerOfTwoInitialCapacity: Int, loadFactor: F
   }
 
   /** Remove all elements from this set and set back to initial configuration */
-  def clear(): Unit = {
+  final def clear(): Unit = {
     used = 0
     allocate(powerOfTwoInitialCapacity)
   }

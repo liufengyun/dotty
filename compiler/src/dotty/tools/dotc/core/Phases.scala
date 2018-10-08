@@ -134,6 +134,7 @@ object Phases {
      *  The list should never contain NoPhase.
      *  if squashing is enabled, phases in same subgroup will be squashed to single phase.
      */
+    @scala.annotation.filled
     final def usePhases(phasess: List[Phase], squash: Boolean = true): Unit = {
 
       val flatPhases = collection.mutable.ListBuffer[Phase]()
@@ -143,7 +144,7 @@ object Phases {
         case _ => flatPhases += p
       })
 
-      phases = (NoPhase :: flatPhases.toList ::: new TerminalPhase :: Nil).toArray
+      phases = ((NoPhase: @unchecked) :: flatPhases.toList ::: (new TerminalPhase: @unchecked) :: Nil).toArray
       setSpecificPhases()
       var phasesAfter: Set[String] = Set.empty
       nextDenotTransformerId = new Array[Int](phases.length)
@@ -181,7 +182,7 @@ object Phases {
         i += 1
       }
 
-      phases.last.init(this, nextPhaseId) // init terminal phase
+      phases.last.init(this: @unchecked, nextPhaseId) // init terminal phase
 
       i = phases.length
       var lastTransformerId = i
@@ -198,7 +199,7 @@ object Phases {
       }
 
       if (squash) {
-        this.squashedPhases = (NoPhase :: phasess).toArray
+        this.squashedPhases = ((NoPhase: @unchecked) :: phasess).toArray
       } else {
         this.squashedPhases = this.phases
       }
@@ -240,7 +241,7 @@ object Phases {
     final def genBCodePhase: Phase = myGenBCodePhase
 
     private def setSpecificPhases() = {
-      def phaseOfClass(pclass: Class[_]) = phases.find(pclass.isInstance).getOrElse(NoPhase)
+      def phaseOfClass(pclass: Class[_]) = phases.find(pclass.isInstance).getOrElse(NoPhase: @unchecked)
 
       myTyperPhase = phaseOfClass(classOf[FrontEnd])
       mySbtExtractDependenciesPhase = phaseOfClass(classOf[sbt.ExtractDependencies])
@@ -315,9 +316,11 @@ object Phases {
     def isTyper: Boolean = false
 
     /** Can this transform create or delete non-private members? */
+    @scala.annotation.partial
     def changesMembers: Boolean = false
 
     /** Can this transform change the parents of a class? */
+    @scala.annotation.partial
     def changesParents: Boolean = false
 
     def exists: Boolean = true
@@ -338,10 +341,14 @@ object Phases {
      * is reserved for NoPhase and the first real phase is at position 1.
      * -1 if the phase is not installed in the context.
      */
+    @scala.annotation.filled
     def id: Int = myPeriod.firstPhaseId
 
+    @scala.annotation.filled
     def period: Period = myPeriod
+    @scala.annotation.filled
     def start: Int = myPeriod.firstPhaseId
+    @scala.annotation.filled
     def end: Periods.PhaseId = myPeriod.lastPhaseId
 
     final def erasedTypes: Boolean = myErasedTypes   // Phase is after erasure
@@ -354,6 +361,7 @@ object Phases {
     final def sameParentsStartId: Int = mySameParentsStartId
       // id of first phase where all symbols are guaranteed to have the same parents as in this phase
 
+    @scala.annotation.filled
     protected[Phases] def init(base: ContextBase, start: Int, end: Int): Unit = {
       if (start >= FirstPhaseId)
         assert(myPeriod == Periods.InvalidPeriod, s"phase $this has already been used once; cannot be reused")
@@ -368,11 +376,13 @@ object Phases {
       mySameParentsStartId = if (changesParents) id else prev.sameParentsStartId
     }
 
+    @scala.annotation.filled
     protected[Phases] def init(base: ContextBase, id: Int): Unit = init(base, id, id)
 
     final def <=(that: Phase): Boolean =
       exists && id <= that.id
 
+    @scala.annotation.filled
     final def prev: Phase =
       if (id > FirstPhaseId) myBase.phases(start - 1) else myBase.NoPhase
 

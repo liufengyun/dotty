@@ -751,6 +751,7 @@ object Denotations {
     private[this] var myValidFor: Period = Nowhere
 
     def validFor: Period = myValidFor
+    @scala.annotation.partial
     def validFor_=(p: Period): Unit = {
       myValidFor = p
       symbol.invalidateDenotCache()
@@ -770,6 +771,7 @@ object Denotations {
      *  2) the union of all validity periods is a contiguous
      *     interval.
      */
+    @scala.annotation.filled
     protected var nextInRun: SingleDenotation = this
 
     /** The version of this SingleDenotation that was valid in the first phase
@@ -1171,7 +1173,10 @@ object Denotations {
   // --- Overloaded denotations and predenotations -------------------------------------------------
 
   trait MultiPreDenotation extends PreDenotation {
+    @scala.annotation.partial
     def denot1: PreDenotation
+
+    @scala.annotation.partial
     def denot2: PreDenotation
 
     assert(denot1.exists && denot2.exists, s"Union of non-existing denotations ($denot1) and ($denot2)")

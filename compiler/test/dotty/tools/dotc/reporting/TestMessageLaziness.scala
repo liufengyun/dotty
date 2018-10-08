@@ -8,7 +8,7 @@ import core.Contexts._
 import diagnostic.{ErrorMessageID, ExtendMessage, Message, MessageContainer}
 
 class TestMessageLaziness extends DottyTest {
-  ctx = ctx.fresh.setReporter(new NonchalantReporter)
+  ctx = ctx.fresh.setReporter(new NonchalantReporter: @unchecked)
 
   class NonchalantReporter(implicit ctx: Context) extends Reporter
   with UniqueMessagePositions with HideNonSensicalMessages {

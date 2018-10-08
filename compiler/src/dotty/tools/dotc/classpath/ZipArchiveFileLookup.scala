@@ -16,6 +16,7 @@ import dotty.tools.io.{ClassPath, ClassRepresentation}
  * It's aware of things like e.g. META-INF directory which is correctly skipped.
  */
 trait ZipArchiveFileLookup[FileEntryType <: ClassRepresentation] extends ClassPath {
+  @scala.annotation.init
   val zipFile: File
 
   assert(zipFile != null, "Zip file in ZipArchiveFileLookup cannot be null")

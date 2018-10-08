@@ -23,6 +23,7 @@ trait DottyTest extends ContextEscapeDetection {
 
   implicit var ctx: Context = initialCtx
 
+  @scala.annotation.partial
   protected def initialCtx: FreshContext = {
     val base = new ContextBase {}
     import base.settings._
@@ -39,6 +40,7 @@ trait DottyTest extends ContextEscapeDetection {
     ctx = null
   }
 
+  @scala.annotation.partial
   protected def initializeCtx(fc: FreshContext): Unit = {
     fc.setSetting(fc.settings.encoding, "UTF8")
     fc.setSetting(fc.settings.classpath, TestConfiguration.basicClasspath)

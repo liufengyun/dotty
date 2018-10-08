@@ -96,14 +96,17 @@ class PickleBuffer(data: Array[Byte], from: Int, to: Int) {
   def peekByte(): Int = bytes(readIndex)
 
   /** Read a byte */
+  @scala.annotation.filled
   def readByte(): Int = {
     val x = bytes(readIndex); readIndex += 1; x
   }
 
   /** Read a natural number in big endian format, base 128.
    *  All but the last digits have bit 0x80 set.*/
+  @scala.annotation.filled
   def readNat(): Int = readLongNat().toInt
 
+  @scala.annotation.filled
   def readLongNat(): Long = {
     var b = 0L
     var x = 0L
@@ -174,6 +177,7 @@ class PickleBuffer(data: Array[Byte], from: Int, to: Int) {
    *  @return an array mapping entry numbers to locations in
    *  the byte array where the entries start.
    */
+  @scala.annotation.filled
   def createIndex: Array[Int] = {
     val index = new Array[Int](readNat()) // nbEntries_Nat
     for (i <- 0 until index.length) {

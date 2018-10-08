@@ -156,6 +156,7 @@ abstract class Reporter extends interfaces.ReporterResult {
   }
 
   type ErrorHandler = MessageContainer => Context => Unit
+  @scala.annotation.filled
   private[this] var incompleteHandler: ErrorHandler = d => c => report(d)(c)
   def withIncompleteHandler[T](handler: ErrorHandler)(op: => T): T = {
     val saved = incompleteHandler

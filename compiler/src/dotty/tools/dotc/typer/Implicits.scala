@@ -317,7 +317,7 @@ object Implicits {
       val id =
         if (tpe.isInstanceOf[AmbiguousImplicits]) "/* ambiguous */"
         else "/* missing */"
-      SearchFailure(untpd.SearchFailureIdent(id.toTermName).withTypeUnchecked(tpe))
+      SearchFailure(untpd.SearchFailureIdent(id.toTermName).withTypeUnchecked(tpe: @unchecked))
     }
   }
 

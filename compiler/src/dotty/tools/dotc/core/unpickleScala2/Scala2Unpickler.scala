@@ -226,7 +226,7 @@ class Scala2Unpickler(bytes: Array[Byte], classRoot: ClassDenotation, moduleClas
       case ex: RuntimeException => handleRuntimeException(ex)
     }
 
-  def source(implicit ctx: Context): AbstractFile = {
+  final def source(implicit ctx: Context): AbstractFile = {
     val f = classRoot.symbol.associatedFile
     if (f != null) f else moduleClassRoot.symbol.associatedFile
   }

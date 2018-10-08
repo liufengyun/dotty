@@ -7,6 +7,7 @@ import util.Chars._
 abstract class CharArrayReader { self =>
 
   val buf: Array[Char]
+  @scala.annotation.partial
   protected def startFrom: Int = 0
 
   /** Switch whether unicode should be decoded */

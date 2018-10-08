@@ -442,7 +442,7 @@ object Checking {
    *  @return The `info` of `sym`, with problematic aliases expanded away.
    */
   def checkNoPrivateLeaks(sym: Symbol, pos: Position)(implicit ctx: Context): Type = {
-    class NotPrivate extends TypeMap {
+    final class NotPrivate extends TypeMap {
       var errors: List[() => String] = Nil
 
       def accessBoundary(sym: Symbol): Symbol =

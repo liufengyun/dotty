@@ -46,7 +46,7 @@ class TyperState(previous: TyperState /* | Null */) {
   }
 
   private val previousConstraint =
-    if (previous == null) constraint else previous.constraint
+    if (previous == null) myConstraint else previous.constraint
 
   private[this] var myIsCommittable = true
 

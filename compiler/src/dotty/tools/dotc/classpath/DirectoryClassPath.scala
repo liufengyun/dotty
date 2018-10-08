@@ -21,6 +21,7 @@ import scala.collection.JavaConverters._
 trait DirectoryLookup[FileEntryType <: ClassRepresentation] extends ClassPath {
   type F
 
+  @scala.annotation.init
   val dir: F
 
   protected def emptyFiles: Array[F] // avoids reifying ClassTag[F]

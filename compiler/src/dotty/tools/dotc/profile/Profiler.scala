@@ -98,12 +98,6 @@ private [profile] class RealProfiler(reporter : ProfileReporter)(implicit ctx: C
 
   def outDir: AbstractFile = ctx.settings.outputDir.value
 
-  val id: Int = RealProfiler.idGen.incrementAndGet()
-  RealProfiler.gcMx foreach {
-    case emitter: NotificationEmitter => emitter.addNotificationListener(this, null, null)
-    case gc => println(s"Cant connect gcListener to ${gc.getClass}")
-  }
-
   private val mainThread = Thread.currentThread()
 
   private[profile] def snapThread(idleTimeNanos: Long): ProfileSnap = {
@@ -128,7 +122,13 @@ private [profile] class RealProfiler(reporter : ProfileReporter)(implicit ctx: C
     System.runFinalization()
   }
 
-  reporter.header(this)
+  reporter.header(this: @unchecked)
+
+  val id: Int = RealProfiler.idGen.incrementAndGet()
+  RealProfiler.gcMx foreach {
+    case emitter: NotificationEmitter => emitter.addNotificationListener(this, null, null)
+    case gc => println(s"Cant connect gcListener to ${gc.getClass}")
+  }
 
   override def finished(): Unit = {
     //we may miss a GC event if gc is occurring as we call this

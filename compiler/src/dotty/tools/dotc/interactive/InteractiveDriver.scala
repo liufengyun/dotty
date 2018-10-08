@@ -30,14 +30,14 @@ class InteractiveDriver(val settings: List[String]) extends Driver {
     val rootCtx = initCtx.fresh.addMode(Mode.ReadPositions).addMode(Mode.Interactive).addMode(Mode.ReadComments)
     rootCtx.setSetting(rootCtx.settings.YretainTrees, true)
     rootCtx.setSetting(rootCtx.settings.YcookComments, true)
-    val ctx = setup(settings.toArray, rootCtx)._2
+    val ctx = setup(settings.toArray, rootCtx)._2: @unchecked
     ctx.initialize()(ctx)
     ctx
   }
 
   private[this] var myCtx: Context = myInitCtx
 
-  def currentCtx: Context = myCtx
+  final def currentCtx: Context = myCtx
 
   private val myOpenedFiles = new mutable.LinkedHashMap[URI, SourceFile] {
     override def default(key: URI) = NoSource

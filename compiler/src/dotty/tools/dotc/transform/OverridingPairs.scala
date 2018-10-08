@@ -27,12 +27,14 @@ object OverridingPairs {
     /** Symbols to exclude: Here these are constructors and private locals.
      *  But it may be refined in subclasses.
      */
+    @scala.annotation.partial
     protected def exclude(sym: Symbol): Boolean = !sym.memberCanMatchInheritedSymbols
 
     /** The parents of base that are checked when deciding whether an overriding
      *  pair has already been treated in a parent class.
      *  This may be refined in subclasses. @see Bridges for a use case.
      */
+    @scala.annotation.partial
     protected def parents: Array[Symbol] = base.info.parents.toArray map (_.typeSymbol)
 
     /** Does `sym1` match `sym2` so that it qualifies as overriding.

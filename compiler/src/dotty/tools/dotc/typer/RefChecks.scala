@@ -866,6 +866,11 @@ object RefChecks {
   /** A class to help in forward reference checking */
   class LevelInfo(outerLevelAndIndex: LevelAndIndex, stats: List[Tree])(implicit ctx: Context)
   extends OptLevelInfo {
+
+    var maxIndex: Int = Int.MinValue
+    var refPos: Position = NoPosition
+    var refSym: Symbol = null
+
     override val levelAndIndex: LevelAndIndex =
       ((outerLevelAndIndex, 0) /: stats) {(mi, stat) =>
         val (m, idx) = mi
@@ -875,9 +880,6 @@ object RefChecks {
         }
         (m1, idx + 1)
       }._1
-    var maxIndex: Int = Int.MinValue
-    var refPos: Position = _
-    var refSym: Symbol = _
 
     override def enterReference(sym: Symbol, pos: Position): Unit =
       if (sym.exists && sym.owner.isTerm)

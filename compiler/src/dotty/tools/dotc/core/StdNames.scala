@@ -44,16 +44,20 @@ object StdNames {
   }
 
   abstract class DefinedNames[N <: Name] {
+    @scala.annotation.partial
     protected implicit def fromString(s: String): N
+    @scala.annotation.partial
     protected def fromName(name: Name): N = fromString(name.toString)
 
     private val kws = mutable.Set[N]()
+    @scala.annotation.filled
     protected def kw(name: N): N = { kws += name; name }
 
     final val keywords: collection.Set[N] = kws
   }
 
   abstract class ScalaNames[N <: Name] extends DefinedNames[N] {
+    @scala.annotation.partial
     protected def encode(s: String): N = fromName(fromString(s).encode)
 
 // Keywords, need to come first -----------------------
@@ -688,6 +692,7 @@ object StdNames {
   }
 
   class ScalaTermNames extends ScalaNames[TermName] {
+    @scala.annotation.partial
     protected implicit def fromString(s: String): TermName = termName(s)
 
     def syntheticParamName(i: Int): TermName = (i: @switch) match {
@@ -748,7 +753,8 @@ object StdNames {
   }
 
   class ScalaTypeNames extends ScalaNames[TypeName] {
-    protected implicit def fromString(s: String): TypeName = typeName(s)
+    @scala.annotation.partial
+    final protected implicit def fromString(s: String): TypeName = typeName(s)
 
     def syntheticTypeParamName(i: Int): TypeName = "X" + i
 

@@ -1652,6 +1652,7 @@ object Types {
     type ThisType >: this.type <: NamedType
     type ThisName <: Name
 
+    @scala.annotation.init
     val prefix: Type
     def designator: Designator
     protected def designator_=(d: Designator): Unit
@@ -2437,7 +2438,7 @@ object Types {
     private[Types] var opened: Boolean = false
     private[Types] var openedTwice: Boolean = false
 
-    val parent: Type = parentExp(this)
+    val parent: Type = parentExp(this: @unchecked)
 
     private[this] var myRecThis: RecThis = null
 
@@ -2971,8 +2972,8 @@ object Types {
 
     type This = MethodType
 
-    val paramInfos: List[Type] = paramInfosExp(this)
-    val resType: Type = resultTypeExp(this)
+    val paramInfos: List[Type] = paramInfosExp(this: @unchecked)
+    val resType: Type = resultTypeExp(this: @unchecked)
     assert(resType.exists)
 
     def companion: MethodTypeCompanion
@@ -3139,8 +3140,8 @@ object Types {
     type This = HKTypeLambda
     def companion: HKTypeLambda.type = HKTypeLambda
 
-    val paramInfos: List[TypeBounds] = paramInfosExp(this)
-    val resType: Type = resultTypeExp(this)
+    val paramInfos: List[TypeBounds] = paramInfosExp(this: @unchecked)
+    val resType: Type = resultTypeExp(this: @unchecked)
 
     assert(resType.isInstanceOf[TermType], this)
     assert(paramNames.nonEmpty)
@@ -3158,8 +3159,8 @@ object Types {
     type This = PolyType
     def companion: PolyType.type = PolyType
 
-    val paramInfos: List[TypeBounds] = paramInfosExp(this)
-    val resType: Type = resultTypeExp(this)
+    val paramInfos: List[TypeBounds] = paramInfosExp(this: @unchecked)
+    val resType: Type = resultTypeExp(this: @unchecked)
 
     assert(resType.isInstanceOf[TermType], this)
     assert(paramNames.nonEmpty)

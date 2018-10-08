@@ -197,7 +197,7 @@ object SymbolLoaders {
 
   /** Load contents of a package
    */
-  class PackageLoader(_sourceModule: TermSymbol, classPath: ClassPath)
+  final class PackageLoader(_sourceModule: TermSymbol, classPath: ClassPath)
       extends SymbolLoader {
     override def sourceModule(implicit ctx: Context): TermSymbol = _sourceModule
     def description(implicit ctx: Context): String = "package loader " + sourceModule.fullName

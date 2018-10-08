@@ -31,7 +31,7 @@ import scala.annotation.internal.sharable
  *  @param commentUnpicklerOpt the unpickler for comments, if it exists
  *  @param splices
  */
-class TreeUnpickler(reader: TastyReader,
+final class TreeUnpickler(reader: TastyReader,
                     nameAtRef: NameRef => TermName,
                     posUnpicklerOpt: Option[PositionUnpickler],
                     commentUnpicklerOpt: Option[CommentUnpickler],

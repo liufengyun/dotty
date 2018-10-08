@@ -79,7 +79,7 @@ class ReplDriver(settings: Array[String],
    *  such, when the user enters `:reset` this method should be called to reset
    *  everything properly
    */
-  protected[this] def resetToInitial(): Unit = {
+  final protected[this] def resetToInitial(): Unit = {
     rootCtx = initialCtx
     if (rootCtx.settings.outputDir.isDefault(rootCtx))
       rootCtx = rootCtx.fresh

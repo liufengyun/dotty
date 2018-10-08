@@ -31,7 +31,7 @@ class PlainFile(val givenPath: Path) extends AbstractFile {
   def name: String = givenPath.name
 
   /** Returns the path of this abstract file. */
-  def path: String = givenPath.path
+  final def path: String = givenPath.path
 
   /** The absolute file. */
   def absolute: PlainFile = new PlainFile(givenPath.toAbsolute)

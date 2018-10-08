@@ -1582,7 +1582,7 @@ object messages {
   case class CannotHaveSameNameAs(sym: Symbol, cls: Symbol, reason: CannotHaveSameNameAs.Reason)(implicit ctx: Context)
     extends Message(CannotHaveSameNameAsID) {
     import CannotHaveSameNameAs._
-    def reasonMessage: String = reason match {
+    final def reasonMessage: String = reason match {
       case CannotBeOverridden => "class definitions cannot be overridden"
       case DefinedInSelf(self) =>
         s"""cannot define ${sym.showKind} member with the same name as a ${cls.showKind} member in self reference ${self.name}.

@@ -24,7 +24,7 @@ object LambdaLift {
   private class NoPath extends Exception
 
   /** The core lambda lift functionality. */
-  class Lifter(thisPhase: MiniPhase with DenotTransformer)(implicit ctx: Context) {
+  final class Lifter(thisPhase: MiniPhase with DenotTransformer)(implicit ctx: Context) {
 
     private type SymSet = TreeSet[Symbol]
 
