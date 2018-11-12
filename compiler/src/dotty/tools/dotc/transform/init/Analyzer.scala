@@ -50,8 +50,10 @@ class Analyzer extends Indexer { analyzer =>
     val funRes = apply(fun)
 
     val args = argss.flatten
-    val values = args.map { arg =>
-      val res = apply(arg)
+    val paramInfos = funSym.info.paramInfoss.flatten
+
+    val values = args.zip(paramInfos).map { case (arg, argTp) =>
+      val res = if (argTp.isInstanceOf[ExprType]) Res(value = byNameValue(arg)) else apply(arg)
       funRes ++= res.effects
       res.value
     }
@@ -195,11 +197,12 @@ class Analyzer extends Indexer { analyzer =>
 
     val cls = init.owner.asClass
     val args = argss.flatten
+    val paramInfos = init.info.paramInfoss.flatten
 
     // setup constructor params
     var effs = Vector.empty[Effect]
-    val argValues = args.map { arg =>
-      val res = apply(arg)
+    val argValues = args.zip(paramInfos).map { case (arg, argTp) =>
+      val res = if (argTp.isInstanceOf[ExprType]) Res(value = byNameValue(arg)) else apply(arg)
       effs = effs ++ res.effects
       res.value
     }

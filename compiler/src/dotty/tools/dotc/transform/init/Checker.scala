@@ -50,7 +50,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     if (!tree.isClassDef) return tree
 
     val cls = tree.symbol.asClass
-    if (cls.hasAnnotation(defn.UncheckedAnnot)) return tree
+    if (cls.isUnchecked) return tree
     checkInit(cls, tree)
 
     tree

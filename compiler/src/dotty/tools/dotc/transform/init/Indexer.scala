@@ -129,6 +129,27 @@ trait Indexer { self: Analyzer =>
       override def show(implicit setting: ShowSetting): String = vdef.symbol(setting.ctx).show(setting.ctx)
     }
 
+  def byNameValue(tree: Tree)(implicit setting: Setting): LazyValue =
+    new LazyValue { lz =>
+      def apply(values: Int => Value, argPos: Int => Position)(implicit setting2: Setting): Res = {
+        // TODO: implicit ambiguities
+        implicit val ctx: Context = setting2.ctx
+        val env2 = setting2.heap(setting.env.id).asEnv
+        val setting3: Setting = setting2.withCtx(setting2.ctx.withOwner(setting.ctx.owner)).withEnv(env2)
+        self.apply(tree)(setting3)
+      }
+
+      def widen(implicit setting2: Setting) = {
+        // TODO: implicit ambiguities
+        implicit val ctx: Context = setting2.ctx
+        val env = setting2.heap(setting.env.id).asEnv
+        val setting3 = setting2.withCtx(setting2.ctx.withOwner(setting.ctx.owner)).withEnv(env)
+        widenTree(tree)(setting3)
+      }
+
+      override def show(implicit setting: ShowSetting): String = tree.show(setting.ctx)
+    }
+
   /** Index local definitions */
   def indexStats(stats: List[Tree])(implicit setting: Setting): Unit = stats.foreach {
     case ddef: DefDef if !ddef.symbol.isConstructor =>  // TODO: handle secondary constructor

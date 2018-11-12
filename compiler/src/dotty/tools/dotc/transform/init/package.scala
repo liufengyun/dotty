@@ -34,6 +34,9 @@ package object init {
       if (isCold) ColdValue
       else if (isWarm) WarmValue()
       else HotValue
+
+    def isUnchecked(implicit ctx: Context) = tp.widenExpr.dealiasKeepAnnots.hasAnnotation(defn.UncheckedAnnot)
+
   }
 
   def calledSymsIn(anchor: Symbol)(implicit ctx: Context): List[Symbol] =
@@ -55,6 +58,8 @@ package object init {
       value.isHot
 
     def isInit(implicit ctx: Context) = sym.hasAnnotation(defn.InitAnnot)
+
+    def isUnchecked(implicit ctx: Context) = sym.hasAnnotation(defn.UncheckedAnnot)
 
     def isEffectiveCold(implicit ctx: Context) =
       sym.isIcy || sym.isCold || sym.isCalledAbove(sym.owner.asClass)

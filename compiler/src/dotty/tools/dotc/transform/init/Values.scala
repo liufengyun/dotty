@@ -28,7 +28,7 @@ object Value {
       val value = scala.util.Try(values(index)).getOrElse(HotValue)
       val pos = scala.util.Try(argPos(index)).getOrElse(NoPosition)
       val wValue = value.widen(setting.widening)
-      if (!wValue.isHot && (onlyHot || !tp.isCold) || wValue.isIcy)  // warm objects only leak as cold, for safety and simplicity
+      if (!tp.isUnchecked && !wValue.isHot && (onlyHot || !tp.isCold) || wValue.isIcy)  // warm objects only leak as cold, for safety and simplicity
         return Res(effects = Vector(Generic(wValue.debugInfo, pos)))
     }
     Res()
