@@ -6,6 +6,7 @@ import MegaPhase._
 import Contexts.Context
 import StdNames._
 import Names._
+import NameKinds.DefaultGetterName
 import Phases._
 import ast._
 import Trees._
@@ -89,6 +90,11 @@ package object init {
 
     def isNonParamField(implicit ctx: Context) =
       sym.isTerm && sym.is(AnyFlags, butNot = Method | ParamAccessor | Lazy | Deferred)
+
+    def ignorable(implicit ctx: Context): Boolean =
+      sym.name.is(DefaultGetterName) ||
+        sym.is(Flags.JavaDefined) ||
+        (sym.owner.eq(defn.AnyClass) && sym.is(Flags.Final))
 
     // def isField(implicit ctx: Context) =
     //   sym.isTerm && sym.is(AnyFlags, butNot = Method | Lazy | Deferred)

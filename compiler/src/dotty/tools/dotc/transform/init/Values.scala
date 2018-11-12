@@ -381,7 +381,7 @@ case class WarmValue(val deps: Set[Type] = Set.empty, unknownDeps: Boolean = tru
   def select(sym: Symbol, isStaticDispatch: Boolean)(implicit setting: Setting): Res = {
     val res = Res()
     if (sym.is(Flags.Method)) {
-      if (!sym.isCold && !sym.isEffectiveInit && !sym.name.is(DefaultGetterName))
+      if (!sym.isCold && !sym.isEffectiveInit && !sym.ignorable)
         res += Generic(s"The $sym should be marked as `@init` in order to be called", setting.pos)
 
       res.value = Value.defaultFunctionValue(sym)
@@ -701,7 +701,7 @@ class ObjectValue(val tp: Type, val open: Boolean = false, var cooking: Boolean 
       }
 
 
-    if (open && !isStaticDispatch && !target.isClass) {
+    if (open && !isStaticDispatch && !target.isClass & !target.ignorable) {
       val res =
         if (target.is(Flags.Method)) Res(value = Value.defaultFunctionValue(target))
         else Res()

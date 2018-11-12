@@ -166,8 +166,9 @@ trait Indexer { self: Analyzer =>
     // propagate constructor arguments
     tmpl.constr.vparamss.flatten.zipWithIndex.foreach { case (param: ValDef, index) =>
       val sym = cls.info.member(param.name).suchThat(x => !x.is(Method)).symbol
-      if (sym.exists) slice.add(sym, values(index))
-      slice.innerEnv.add(param.symbol, values(index))
+      val value = try values(index) catch { case _: Throwable => HotValue } // TODO: support 2nd-constructor
+      if (sym.exists) slice.add(sym, value)
+      slice.innerEnv.add(param.symbol, value)
     }
 
     // setup this
@@ -240,7 +241,7 @@ trait Indexer { self: Analyzer =>
     def settingFresh(): Setting = {
       val setting2 = setting.freshHeap
       val obj2 = obj.clone
-      val slice = indexSlice(cls, tmpl, obj2, i => values(i))(setting2)
+      val slice = indexSlice(cls, tmpl, obj2, values)(setting2)
       setting2.withEnv(slice.innerEnv).copy(inferInit = false, autoApply = true, trace = true)
     }
 
