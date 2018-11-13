@@ -23,27 +23,31 @@ import collection.mutable
 
 object Value {
 
-  def checkParams(sym: Symbol, paramInfos: List[Type], values: Int => Value, argPos: Int => Position, onlyHot: Boolean = false)(implicit setting: Setting): Res = {
+  def checkParams(sym: Symbol, paramInfos: List[Type], values: Int => OpaqueValue, argPos: Int => Position, onlyHot: Boolean = false)(implicit setting: Setting): Res = {
     paramInfos.zipWithIndex.foreach { case (tp, index) =>
       val value = scala.util.Try(values(index)).getOrElse(HotValue)
       val pos = scala.util.Try(argPos(index)).getOrElse(NoPosition)
-      val wValue = value.widen(setting.widening)
-      if (!tp.isUnchecked && !wValue.isHot && (onlyHot || !tp.isCold) || wValue.isIcy)  // warm objects only leak as cold, for safety and simplicity
-        return Res(effects = Vector(Generic(wValue.debugInfo, pos)))
+      if (!tp.isUnchecked && !value.isHot && (onlyHot || !tp.isCold) || value.isIcy)  // warm objects only leak as cold, for safety and simplicity
+        return Res(effects = Vector(Generic(value.debugInfo, pos)))
     }
     Res()
   }
 
-  def defaultFunctionValue(methSym: Symbol)(implicit setting: Setting): Value = {
+  def defaultFunctionValue(methSym: Symbol, receiver: OpaqueValue)(implicit setting: Setting): Value = {
     assert(methSym.is(Flags.Method))
-    if (methSym.info.paramNamess.isEmpty && setting.autoApply) HotValue
+    if (methSym.info.paramNamess.isEmpty && setting.autoApply) methSym.info.finalResultType.value.leftMeet(receiver)
     else new FunctionValue() {
       def apply(values: Int => Value, argPos: Int => Position)(implicit setting: Setting): Res = {
         val paramInfos = methSym.info.paramInfoss.flatten
-        checkParams(methSym, paramInfos, values, argPos, onlyHot = true)
+        val valuesWidened = (0 until paramInfos.size).map { i => values(i).widen(setting.widening) }
+
+        val res = checkParams(methSym, paramInfos, valuesWidened, argPos, onlyHot = true)
+        val paramValue = valuesWidened.foldLeft(HotValue: OpaqueValue) { (acc, v) => acc.join(v) }
+        res.value = methSym.info.finalResultType.value.leftMeet(receiver.join(paramValue))
+        res
       }
 
-      def widen(implicit setting: Setting) = HotValue  // could be reached by tryWiden on funtions
+      def widen(implicit setting: Setting) = methSym.info.finalResultType.value  // could be reached by tryWiden on funtions
     }
   }
 
@@ -53,13 +57,11 @@ object Value {
       def init(constr: Symbol, values: List[Value], argPos: List[Position], obj: ObjectValue)(implicit setting: Setting): Res = {
         val cls = constr.owner.asClass
         val paramInfos = constr.info.paramInfoss.flatten
-        val res = Value.checkParams(cls, paramInfos, values, argPos)
+        val valuesWidened = (0 until paramInfos.size).map { i => values(i).widen(setting.widening) }
+        val res = Value.checkParams(cls, paramInfos, valuesWidened, argPos)
         if (res.hasErrors) return res
 
-        val args = (0 until paramInfos.size).map(i => scala.util.Try(values(i)).getOrElse(HotValue))
-        val value = args.foldLeft(prefix) { (acc, v) =>
-          acc.join(v.widen)
-        }
+        val value = valuesWidened.foldLeft(prefix) { (acc, v) => acc.join(v) }
 
         if (cls == obj.tp.classSymbol && !obj.open) obj.add(cls, value.meet(WarmValue()))
         else if (!value.isHot) obj.add(cls, WarmValue())
@@ -77,7 +79,8 @@ object Value {
     else new FunctionValue() {
       def apply(values: Int => Value, argPos: Int => Position)(implicit setting: Setting): Res = {
         val paramInfos = methSym.info.paramInfoss.flatten
-        val effs = checkParams(methSym, paramInfos, values, argPos, onlyHot = true).effects
+        val valuesWidened = (0 until paramInfos.size).map { i => values(i).widen(setting.widening) }
+        val effs = checkParams(methSym, paramInfos, valuesWidened, argPos, onlyHot = true).effects
         value.apply(values, argPos) ++ effs
       }
 
@@ -258,12 +261,21 @@ abstract sealed class OpaqueValue extends SingleValue {
     case _ => IcyValue
   }
 
+  def leftMeet(that: OpaqueValue): OpaqueValue = (this, that) match {
+    case (WarmValue(deps1, unknown1), WarmValue(deps2, unknown2)) =>
+      if (!unknown1 && !unknown2) WarmValue(deps1 & deps2, unknownDeps = false)
+      else if (!unknown1) this
+      else if (!unknown2) that
+      else WarmValue(Set.empty, unknownDeps = true)
+    case _ => this
+  }
+
   def widen(implicit setting: Setting): OpaqueValue = this
 }
 
 object HotValue extends OpaqueValue {
   def select(sym: Symbol, isStaticDispatch: Boolean)(implicit setting: Setting): Res =
-    if (sym.is(Flags.Method)) Res(value = Value.defaultFunctionValue(sym))
+    if (sym.is(Flags.Method)) Res(value = Value.defaultFunctionValue(sym, HotValue))
     else if (sym.isClass) Res(value = Value.defaultClassValue(sym, HotValue))
     else Res()
 
@@ -301,7 +313,7 @@ object IcyValue extends OpaqueValue {
       if (!sym.isIcy && !sym.name.is(DefaultGetterName))
         res += Generic(s"The $sym should be marked as `@icy` in order to be called", setting.pos)
 
-      res.value = Value.defaultFunctionValue(sym)
+      res.value = Value.defaultFunctionValue(sym, IcyValue)
     }
     else if (sym.is(Flags.Lazy)) {
       if (!sym.isIcy)
@@ -341,7 +353,7 @@ object ColdValue extends OpaqueValue {
       if (!sym.isCold && !sym.name.is(DefaultGetterName))
         res += Generic(s"The $sym should be marked as `@cold` in order to be called", setting.pos)
 
-      res.value = Value.defaultFunctionValue(sym)
+      res.value = Value.defaultFunctionValue(sym, ColdValue)
     }
     else if (sym.is(Flags.Lazy)) {
       if (!sym.isCold)
@@ -384,7 +396,7 @@ case class WarmValue(val deps: Set[Type] = Set.empty, unknownDeps: Boolean = tru
       if (!sym.isCold && !sym.isEffectiveInit && !sym.ignorable)
         res += Generic(s"The $sym should be marked as `@init` in order to be called", setting.pos)
 
-      res.value = Value.defaultFunctionValue(sym)
+      res.value = Value.defaultFunctionValue(sym, this)
     }
     else if (sym.is(Flags.Lazy) && !sym.isEffectiveInit) {
       if (!sym.isCold && !sym.isWarm)
@@ -415,14 +427,14 @@ case class WarmValue(val deps: Set[Type] = Set.empty, unknownDeps: Boolean = tru
 
   override def widen(implicit setting: Setting) =
     if (unknownDeps) this
-    else if (setting.propagateDeps) propagate
-    else {
+    else if (setting.propagateDeps) { propagate }
+    else setting.widenFor(this) {
       val notHot = deps.filterNot(setting.widen(_).isHot)
       if (notHot.isEmpty) HotValue
       else WarmValue(notHot.toSet, unknownDeps = false)
     }
 
-  def propagate(implicit setting: Setting): OpaqueValue = {
+  def propagate(implicit setting: Setting): OpaqueValue = setting.widenFor(this) {
     val zero: Set[Type] = Set.empty
     val deps2 = deps.foldLeft(zero) { case (deps, dep) =>
       setting.widen(dep) match {
@@ -703,7 +715,7 @@ class ObjectValue(val tp: Type, val open: Boolean = false, var cooking: Boolean 
 
     if (open && !isStaticDispatch && !target.isClass & !target.ignorable) {
       val res =
-        if (target.is(Flags.Method)) Res(value = Value.defaultFunctionValue(target))
+        if (target.is(Flags.Method)) Res(value = Value.defaultFunctionValue(target, HotValue))
         else Res()
 
       // propagate calls. TODO: odering problem in propagation

@@ -48,7 +48,7 @@ case class Setting(
       }
 
     def widen(tp: Type): OpaqueValue = {
-      val res = analyzer.checkRef(tp)(this)
+      val res = analyzer.checkRef(tp, widening = true)(this)
       if (res.hasErrors) WarmValue() else res.value.widen(this)
     }
 

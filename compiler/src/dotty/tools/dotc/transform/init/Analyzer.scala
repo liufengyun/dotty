@@ -69,24 +69,24 @@ class Analyzer extends Indexer { analyzer =>
     res
   }
 
-  def checkRef(tp: Type)(implicit setting: Setting): Res = trace("checking " + tp.show)(tp.dealias match {
+  def checkRef(tp: Type, widening: Boolean = false)(implicit setting: Setting): Res = trace("checking " + tp.show)(tp.dealias match {
     case tp : TermRef if tp.symbol.is(Module) && setting.ctx.owner.enclosedIn(tp.symbol.moduleClass) =>
       // self reference by name: object O { ... O.xxx }
-      checkRef(ThisType.raw(tp.symbol.moduleClass.typeRef))
+      checkRef(ThisType.raw(tp.symbol.moduleClass.typeRef), widening)
     case tp @ TermRef(NoPrefix, _) =>
       setting.env.select(tp.symbol)
     case tp @ TypeRef(NoPrefix, _) =>
       setting.env.select(tp.symbol, isType = true)
     case tp @ TermRef(prefix, _) =>
-      val res = checkRef(prefix)
+      val res = checkRef(prefix, widening)
       res.value.select(tp.symbol) ++ res.effects
     case tp @ TypeRef(prefix, _) =>
-      val res = checkRef(prefix)
+      val res = checkRef(prefix, widening)
       res.value.select(tp.symbol) ++ res.effects
     case tp @ ThisType(tref) =>
       val cls = tref.symbol
       if (cls.is(Package)) Res() // Dotty represents package path by ThisType
-      else if (setting.env.contains(cls)) Res(value = setting.env(cls).tryWiden)
+      else if (setting.env.contains(cls)) Res(value = if (widening) setting.env(cls) else setting.env(cls).tryWiden)
       else {
         // ThisType used outside of class scope, can happen for objects
         // see tests/pos/t2712-7.scala
@@ -94,7 +94,7 @@ class Analyzer extends Indexer { analyzer =>
         Res()
       }
     case tp: AppliedType =>
-      checkRef(tp.tycon)
+      checkRef(tp.tycon, widening)
   })
 
   def checkClosure(sym: Symbol, tree: Tree)(implicit setting: Setting): Res = {
@@ -321,6 +321,8 @@ class Analyzer extends Indexer { analyzer =>
       checkBlock(tree)
     case Typed(expr, tpt) if !tpt.tpe.hasAnnotation(defn.UncheckedAnnot) =>
       apply(expr)
+    case Inlined(call, bindings, expansion) =>
+      checkBlock(Block(bindings, expansion)) // TODO: fix warning positions
     case _ =>
       Res()
   }

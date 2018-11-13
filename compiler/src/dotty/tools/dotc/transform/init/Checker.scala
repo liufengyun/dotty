@@ -79,7 +79,7 @@ class Checker extends MiniPhase with IdentityDenotTransformer { thisPhase =>
     val classValue = analyzer.classValue(cdef)(setting)
     // init check
     val constr = tmpl.constr
-    val values = constr.vparamss.flatten.map { param => param.tpe.widen.value }
+    val values = constr.vparamss.flatten.map { param => param.tpe.value }
     val poss = constr.vparamss.flatten.map(_.pos)
     val res = classValue.init(constr.symbol, values, poss, obj)(setting)
 

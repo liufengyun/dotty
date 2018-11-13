@@ -24,18 +24,22 @@ import collection.mutable
 
 package object init {
   implicit class TypesOps(val tp: Type) extends AnyVal {
-    def isIcy(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.IcyAnnot)
+    private def has(annot: ClassSymbol)(implicit ctx: Context): Boolean =
+      tp.widenExpr.dealiasKeepAnnots.hasAnnotation(annot)
 
-    def isCold(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.ColdAnnot)
+    def isIcy(implicit ctx: Context) = has(defn.IcyAnnot)
 
-    def isWarm(implicit ctx: Context) = tp.dealiasKeepAnnots.hasAnnotation(defn.WarmAnnot)
+    def isCold(implicit ctx: Context) = has(defn.ColdAnnot)
+
+    def isWarm(implicit ctx: Context) = has(defn.WarmAnnot)
+
+    def isUnchecked(implicit ctx: Context) = has(defn.UncheckedAnnot)
 
     def value(implicit ctx: Context) =
       if (isCold) ColdValue
       else if (isWarm) WarmValue()
       else HotValue
 
-    def isUnchecked(implicit ctx: Context) = tp.widenExpr.dealiasKeepAnnots.hasAnnotation(defn.UncheckedAnnot)
 
   }
 

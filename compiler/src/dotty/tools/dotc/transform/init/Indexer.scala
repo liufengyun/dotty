@@ -144,7 +144,7 @@ trait Indexer { self: Analyzer =>
         implicit val ctx: Context = setting2.ctx
         val env = setting2.heap(setting.env.id).asEnv
         val setting3 = setting2.withCtx(setting2.ctx.withOwner(setting.ctx.owner)).withEnv(env)
-        widenTree(tree)(setting3)
+        setting3.widenFor(lz) { widenTree(tree)(setting3) }
       }
 
       override def show(implicit setting: ShowSetting): String = tree.show(setting.ctx)
