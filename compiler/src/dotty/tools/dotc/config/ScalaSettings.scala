@@ -154,6 +154,7 @@ class ScalaSettings extends Settings.SettingGroup {
 
   // Extremely experimental language features
   val YnoKindPolymorphism: Setting[Boolean] = BooleanSetting("-Yno-kind-polymorphism", "Enable kind polymorphism (see http://dotty.epfl.ch/docs/reference/kind-polymorphism.html). Potentially unsound.")
+  val YcheckInit: Setting[Boolean] = BooleanSetting("-Ycheck-init", "Check initialization of class fields")
 
   /** Area-specific debug output */
   val YexplainLowlevel: Setting[Boolean] = BooleanSetting("-Yexplain-lowlevel", "When explaining type errors, show types at a lower level.")

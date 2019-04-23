@@ -882,6 +882,9 @@ class Definitions {
   lazy val FunctionalInterfaceAnnotType = ctx.requiredClassRef("java.lang.FunctionalInterface")
   def FunctionalInterfaceAnnot(implicit ctx: Context) = FunctionalInterfaceAnnotType.symbol.asClass
 
+  lazy val UseAnnotType: TypeRef = ctx.requiredClassRef("scala.annotation.internal.Use")
+  def UseAnnot(implicit ctx: Context): ClassSymbol = UseAnnotType.symbol.asClass
+
   // convenient one-parameter method types
   def methOfAny(tp: Type): MethodType = MethodType(List(AnyType), tp)
   def methOfAnyVal(tp: Type): MethodType = MethodType(List(AnyValType), tp)

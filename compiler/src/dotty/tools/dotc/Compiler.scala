@@ -42,6 +42,7 @@ class Compiler {
     List(new sbt.ExtractDependencies) :: // Sends information on classes' dependencies to sbt via callbacks
     List(new PostTyper) ::          // Additional checks and cleanups after type checking
     List(new sbt.ExtractAPI) ::     // Sends a representation of the API of classes to sbt via callbacks
+    List(new init.CaptureAnalyzer) :: // Analyze effects of definitions
     List(new SetRootTree) ::        // Set the `rootTreeOrProvider` on class symbols
     Nil
 
@@ -53,6 +54,7 @@ class Compiler {
 
   /** Phases dealing with the transformation from pickled trees to backend trees */
   protected def transformPhases: List[List[Phase]] =
+    List(new init.Checker) ::        // Initialization checker
     List(new FirstTransform,         // Some transformations to put trees into a canonical form
          new CheckReentrant,         // Internal use only: Check that compiled program has no data races involving global vars
          new ElimPackagePrefixes,    // Eliminate references to package prefixes in Select nodes
