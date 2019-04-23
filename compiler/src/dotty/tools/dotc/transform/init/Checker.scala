@@ -31,31 +31,24 @@ class Checker extends Phase { thisPhase =>
 
   override def phaseName: String = Checker.name
 
-  def transformTypeDef(tree: TypeDef)(implicit ctx: Context): Tree = {
-    if (!tree.isClassDef) return tree
+  def checkInit(cdef: TypeDef)(implicit ctx: Context): Unit = {
+    val cls = cdef.symbol.asClass
+    if (cls.is(AbstractOrTrait)) return
 
-    val cls = tree.symbol.asClass
-    val skipCheck =  cls.is(AbstractOrTrait) || cls.hasAnnotation(defn.UncheckedAnnot)
-    if (skipCheck) return tree
-
-    checkInit(cls, tree)
-
-    tree
+    new Analyzer(cls).check(cdef)
   }
 
   def run(implicit ctx: Context): Unit = {
     if (!ctx.settings.YcheckInit.value) return
 
     val unit = ctx.compilationUnit
-    println(unit.tpdTree)
-    ctx.fresh.setPhase(this.next)
+    work(unit.tpdTree)(ctx.fresh.setPhase(this.next))
   }
 
-  def checkInit(cls: ClassSymbol, cdef: tpd.TypeDef)(implicit ctx: Context) = {
-    val tmpl = cdef.rhs.asInstanceOf[tpd.Template]
-
-    debug("*************************************")
-    debug("checking " + cls.show)
-    debug("*************************************")
+  def work(tree: Tree)(implicit ctx: Context): Unit = tree match {
+    case PackageDef(_, stats) =>
+      stats.foreach(stat => work(stat))
+    case tree: TypeDef if tree.isClassDef => checkInit(tree)
+    case _ =>
   }
 }

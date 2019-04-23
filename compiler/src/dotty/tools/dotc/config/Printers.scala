@@ -26,7 +26,7 @@ object Printers {
   val hk: Printer = noPrinter
   val implicits: Printer = noPrinter
   val implicitsDetailed: Printer = noPrinter
-  val init: Printer = noPrinter
+  val init: Printer = new Printer
   val inlining: Printer = noPrinter
   val interactiv: Printer = noPrinter
   val overload: Printer = noPrinter

@@ -22,10 +22,8 @@ import config.Printers.init.{ println => debug }
 import Constants.Constant
 import collection.mutable
 
-class Analyzer { analyzer =>
+class Analyzer(cls: ClassSymbol) { analyzer =>
   import tpd._
-
-  type Res = Set[Type]
 
   def checkApply(tree: Tree, fun: Tree, argss: List[List[Tree]])(implicit ctx: Context): Res = ???
 
@@ -70,12 +68,11 @@ class Analyzer { analyzer =>
     }
   }
 
-
-  def apply(tree: Tree)(implicit ctx: Context): Res = tree match {
-    case vdef : ValDef if !vdef.symbol.is(Lazy) && !vdef.rhs.isEmpty =>
+  private def apply(tree: Tree)(implicit ctx: Context): Res = tree match {
+    case vdef: ValDef if !vdef.symbol.is(Lazy) && !vdef.rhs.isEmpty =>
       checkValDef(vdef)
     case _: DefTree =>
-      Set.empty
+      Res()
     case Closure(_, meth, _) =>
       checkClosure(meth.symbol, tree)
     case tree: Ident if tree.symbol.isTerm =>
@@ -102,6 +99,35 @@ class Analyzer { analyzer =>
     case Inlined(call, bindings, expansion) =>
       checkBlock(Block(bindings, expansion))
     case _ =>
-      Set.empty
+      Res()
   }
+
+  def check(tree: TypeDef)(implicit ctx: Context) = {
+    val tmpl = tree.rhs.asInstanceOf[Template]
+
+    debug("*************************************")
+    debug("checking " + cls.show)
+
+    // TODO: be lazy
+    tmpl.body.foreach {
+      case ddef: DefDef =>
+        val res = apply(ddef.rhs)(ctx.withOwner(ddef.symbol))
+        // TODO: handle latent effects of method return?
+        summary(ddef.symbol) = res._1 ++ res._2
+      case _ =>
+        // TODO: handle inner class
+    }
+
+    debug("*************************************")
+  }
+
+  // ======= data
+
+  /** The summary of effects for class member
+   *
+   *   - method     : calling effects
+   *   - lazy val   : access effects
+   *   - val        : usage effects (take access as usage)
+   */
+  private val summary = mutable.Map[Symbol, Set[Type]]()
 }
