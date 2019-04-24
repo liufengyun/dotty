@@ -37,9 +37,15 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     apply(tree.cond) + apply(tree.thenp) + apply(tree.elsep)
 
   def checkValDef(vdef: ValDef)(implicit ctx: Context): Res = {
-    val Res(actual, latent) = apply(vdef.rhs)
-    summary(vdef.symbol) = latent
-    Res(actual)
+    val res = apply(vdef.rhs)
+    if (vdef.symbol.is(Lazy)) {
+      summary(vdef.symbol) = res.actual ++ res.latent
+      Res()
+    }
+    else {
+      summary(vdef.symbol) = res.latent
+      Res(res.actual)
+    }
   }
 
   def checkBlock(tree: Block)(implicit ctx: Context): Res = {
@@ -125,7 +131,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
   }
 
   private def apply(tree: Tree)(implicit ctx: Context): Res = tree match {
-    case vdef: ValDef if !vdef.symbol.is(Lazy) && !vdef.rhs.isEmpty =>
+    case vdef: ValDef if !vdef.rhs.isEmpty =>
       checkValDef(vdef)
     case _: DefTree =>
       Res()
@@ -170,7 +176,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
 
     // TODO: be lazy
     tmpl.body.foreach {
-      case ddef: DefDef =>
+      case ddef: DefDef if !ddef.symbol.is(Deferred) =>
         val res = apply(ddef.rhs)(ctx.withOwner(ddef.symbol))
         // TODO: handle latent effects of method return?
         summary(ddef.symbol) = res._1 ++ res._2
@@ -178,7 +184,8 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
         // TODO: handle inner class
     }
 
-    tmpl.body.foldRight(Res()) { (stat, res) => res + apply(stat) }
+    val res = tmpl.body.foldRight(Res()) { (stat, res) => res | apply(stat) }
+    summary(tmpl.constr.symbol) = res.actual
 
     debug(showSummary)
 
