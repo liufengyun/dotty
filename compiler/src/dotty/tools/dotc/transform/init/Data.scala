@@ -40,4 +40,8 @@ import Constants.Constant
  *    - `C.this.D.<init>`: constructor call, only used as effects of constructors
  *
  */
-case class Res(actual: Set[Type] = Set.empty, latent: Set[Type] = Set.empty)
+case class Res(actual: Set[Type] = Set.empty, latent: Set[Type] = Set.empty) {
+  def +(that: Res) = Res(this.actual ++ that.actual ++ this.latent ++ that.latent, Set.empty)
+  def |(that: Res) = Res(this.actual ++ that.actual, that.latent)
+  def actualize: Res = Res(actual ++ latent)
+}

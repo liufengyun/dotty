@@ -25,23 +25,46 @@ import collection.mutable
 class Analyzer(cls: ClassSymbol) { analyzer =>
   import tpd._
 
-  def checkApply(tree: Tree, fun: Tree, argss: List[List[Tree]])(implicit ctx: Context): Res = ???
+  def checkApply(tree: Tree, fun: Tree, argss: List[List[Tree]])(implicit ctx: Context): Res =
+    argss.flatten.foldRight(apply(fun)) { (arg, res) => apply(arg) + res }
 
-  def checkSelect(tree: Select)(implicit ctx: Context): Res = ???
+  def checkSelect(tree: Select)(implicit ctx: Context): Res = apply(tree.qualifier)
 
-  def checkRef(tp: Type, widening: Boolean = false)(implicit ctx: Context): Res = ???
+  def checkClosure(sym: Symbol, tree: Tree)(implicit ctx: Context): Res =
+    Res(latent = summary(sym))
 
-  def checkClosure(sym: Symbol, tree: Tree)(implicit ctx: Context): Res = ???
+  def checkIf(tree: If)(implicit ctx: Context): Res =
+    apply(tree.cond) + apply(tree.thenp) + apply(tree.elsep)
 
-  def checkIf(tree: If)(implicit ctx: Context): Res = ???
+  def checkValDef(vdef: ValDef)(implicit ctx: Context): Res = {
+    val Res(actual, latent) = apply(vdef.rhs)
+    summary(vdef.symbol) = latent
+    Res(actual)
+  }
 
-  def checkValDef(vdef: ValDef)(implicit ctx: Context): Res = ???
+  def checkBlock(tree: Block)(implicit ctx: Context): Res = {
+    // TODO: be lazy
+    tree.stats.foreach {
+      case ddef: DefDef =>
+        val res = apply(ddef.rhs)(ctx.withOwner(ddef.symbol))
+        // TODO: handle latent effects of method return?
+        summary(ddef.symbol) = res._1 ++ res._2
+      case _ =>
+        // TODO: handle local class
+    }
 
-  def checkStats(stats: List[Tree])(implicit ctx: Context): Res = ???
+    val res = tree.stats.foldRight(Res()) { (stat, res) => res | apply(stat) }
+    res | apply(tree.expr)
 
-  def checkBlock(tree: Block)(implicit ctx: Context): Res = ???
+    // TODO: remember the keys from summary
+  }
 
-  def checkAssign(lhs: Tree, rhs: Tree)(implicit ctx: Context): Res = ???
+  // TODO: maybe remember `this.field_=` as well?
+  def checkAssign(lhs: Select, rhs: Tree)(implicit ctx: Context): Res =
+    apply(lhs.qualifier) + apply(rhs)
+
+  def checkLocalAssign(lhs: Ident, rhs: Tree)(implicit ctx: Context): Res =
+    apply(rhs).actualize
 
   /** Check a parent call */
   def checkInit(tp: Type, init: Symbol, argss: List[List[Tree]])(implicit ctx: Context): Res = ???
@@ -50,7 +73,35 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
 
   def checkNew(tree: Tree, tref: TypeRef, init: Symbol, argss: List[List[Tree]])(implicit ctx: Context): Res = ???
 
-  def checkSuper(tree: Tree, supert: Super)(implicit ctx: Context): Res = ???
+  // TODO: handle outer classes
+  def checkSuperSelect(tree: Select, supert: Super)(implicit ctx: Context): Res = Res(Set(tree.tpe))
+
+  // TODO: handle outer classes
+  def checkThisSelect(tree: Select, thist: This)(implicit ctx: Context): Res = Res(Set(tree.tpe))
+
+  // TODO: handle outer classes
+  def checkThis(tree: This): Res = Res(Set(tree.tpe))
+
+  // TODO: handle local class reference
+  def checkRef(tp: Type)(implicit ctx: Context): Res = tp.dealias match {
+    case tp : TermRef if tp.symbol.is(Module) && ctx.owner.isContainedIn(tp.symbol.moduleClass) =>
+      // self reference by name: object O { ... O.xxx }
+      checkRef(ThisType.raw(tp.symbol.moduleClass.typeRef))
+    case tp @ TermRef(NoPrefix, _) =>
+      // TODO: local definition in outer class
+      // only propagate local effects
+      if (summary.contains(tp.symbol)) Res(summary(tp.symbol)) else Res()
+    case tp @ TermRef(ThisType(tref), _) =>
+      val cls = tref.symbol
+      // TODO: handle outer this
+      // ThisType used outside of class scope, can happen for objects
+      // see tests/pos/t2712-7.scala
+      if (cls.is(Package) || (cls.is(Flags.Module) && !ctx.owner.isContainedIn(cls)))
+        Res()
+      else Res(Set(tp))
+    case _ =>
+      Res()
+  }
 
   object NewEx {
     def extract(tp: Type)(implicit ctx: Context): TypeRef = tp.dealias match {
@@ -78,9 +129,11 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     case tree: Ident if tree.symbol.isTerm =>
       checkRef(tree.tpe)
     case tree: This =>
-      checkRef(tree.tpe)
+      checkThis(tree)
     case tree @ Select(supert: Super, _) =>
-      checkSuper(tree, supert)
+      checkSuperSelect(tree, supert)
+    case tree @ Select(thist: This, _) =>
+      checkThisSelect(tree, thist)
     case tree: Select if tree.symbol.isTerm =>
       checkSelect(tree)
     case tree: If =>
@@ -90,8 +143,10 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     case tree: Apply =>
       val (fn, targs, vargss) = decomposeCall(tree)
       checkApply(tree, fn, vargss)
-    case tree @ Assign(lhs, rhs) =>
-      checkAssign(lhs, rhs)
+    case tree @ Assign(sel: Select, rhs) =>
+      checkAssign(sel, rhs)
+    case tree @ Assign(id: Ident, rhs) =>
+      checkLocalAssign(id, rhs)
     case tree: Block =>
       checkBlock(tree)
     case Typed(expr, tpt) =>
@@ -118,10 +173,19 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
         // TODO: handle inner class
     }
 
+    tmpl.body.foldRight(Res()) { (stat, res) => res + apply(stat) }
+
+    debug(showSummary)
+
     debug("*************************************")
   }
 
-  // ======= data
+  def showSummary(implicit ctx: Context): String =
+    summary.map { (k, v) =>
+      k.show + " -> " + v.map(_.show).mkString("{", ",", "}")
+    }.mkString("\n")
+
+  // ==================== data ====================
 
   /** The summary of effects for class member
    *
