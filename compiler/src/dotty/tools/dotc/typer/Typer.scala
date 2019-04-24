@@ -1712,6 +1712,17 @@ class Typer extends Namer
       for (deriver <- cdef.removeAttachment(Deriver))
         cdef1.putAttachment(Deriver, deriver)
 
+      val initCode = tpd.Block(body1.filter {
+        case vdef: ValDef =>
+          !vdef.symbol.is(ParamAccessor) && !vdef.symbol.is(Lazy) && !vdef.symbol.is(Deferred)
+        case _: DefTree =>
+          false
+        case _ => true
+      }, tpd.unitLiteral)
+
+      // add body to primary constructor
+      PrepareInlineable.registerInlineInfo(constr1.symbol, implicit ctx => initCode)(ctx)
+
       cdef1
 
       // todo later: check that
