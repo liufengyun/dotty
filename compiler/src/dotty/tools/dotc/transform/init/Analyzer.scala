@@ -44,19 +44,24 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
 
   def checkBlock(tree: Block)(implicit ctx: Context): Res = {
     // TODO: be lazy
+    val keys = mutable.Set.empty[Symbol]
     tree.stats.foreach {
       case ddef: DefDef =>
         val res = apply(ddef.rhs)(ctx.withOwner(ddef.symbol))
         // TODO: handle latent effects of method return?
         summary(ddef.symbol) = res._1 ++ res._2
+        keys += ddef.symbol
       case _ =>
         // TODO: handle local class
     }
 
-    val res = tree.stats.foldRight(Res()) { (stat, res) => res | apply(stat) }
-    res | apply(tree.expr)
+    val res1 = tree.stats.foldRight(Res()) { (stat, res) => res | apply(stat) }
+    val res2 = apply(tree.expr)
 
-    // TODO: remember the keys from summary
+    // remove local keys
+    summary --= keys
+
+    res1 | res2
   }
 
   // TODO: maybe remember `this.field_=` as well?
