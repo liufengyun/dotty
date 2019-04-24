@@ -3,6 +3,7 @@ package transform
 package init
 
 import core._
+import typer._
 import MegaPhase._
 import Contexts.Context
 import StdNames._
@@ -184,6 +185,31 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
         summary(ddef.symbol) = res._1 ++ res._2
       case _ =>
         // TODO: handle inner class
+    }
+
+    /** SLS 5.1
+     *
+     *  Template Evaluation Consider a template `sc with mt1 with mtn { stats }`.
+     *
+     *  If this is the template of a trait then its mixin-evaluation consists of
+     *  an evaluation of the statement sequence stats.
+     *
+     *  If this is not a template of a trait, then its evaluation consists of the following steps.
+     *
+     *  - First, the superclass constructor sc is evaluated.
+     *  - Then, all base classes in the template's linearization up to the template's
+     *    superclass denoted by sc are mixin-evaluated. Mixin-evaluation happens in reverse
+     *    order of occurrence in the linearization.
+     *  - Finally the statement sequence stats is evaluated.
+     */
+
+
+    // check parent constructor code according to linearization ordering
+    debug("base classes:" + tree.tpe.baseClasses.mkString(", "))
+    tree.tpe.baseClasses.foreach { cls =>
+      // TODO: remember which constructor is called for each class
+      if (cls.primaryConstructor.hasAnnotation(defn.BodyAnnot))
+        debug("body of " + cls + ":" + Inliner.bodyToInline(cls.primaryConstructor).show)
     }
 
     val res = tmpl.body.foldRight(Res()) { (stat, res) => res | apply(stat) }
