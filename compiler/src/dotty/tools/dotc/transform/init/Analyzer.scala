@@ -177,16 +177,6 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     debug("*************************************")
     debug("checking " + cls.show)
 
-    // TODO: be lazy
-    tmpl.body.foreach {
-      case ddef: DefDef if !ddef.symbol.is(Deferred) =>
-        val res = apply(ddef.rhs)(ctx.withOwner(ddef.symbol))
-        // TODO: handle latent effects of method return?
-        summary(ddef.symbol) = res._1 ++ res._2
-      case _ =>
-        // TODO: handle inner class
-    }
-
     /** SLS 5.1
      *
      *  Template Evaluation Consider a template `sc with mt1 with mtn { stats }`.

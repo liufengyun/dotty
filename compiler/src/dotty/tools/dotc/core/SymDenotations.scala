@@ -1227,6 +1227,13 @@ object SymDenotations {
       else NoSymbol
     }
 
+    /** The list of types that appear as `T` in annotations `@Use[T]`
+     */
+    def uses(implicit ctx: Context): List[Type] =
+      annotations.collect {
+        case Annotation.Use(tp) => tp
+      }
+
     // ----- type-related ------------------------------------------------
 
     /** The type parameters of a class symbol, Nil for all other symbols */

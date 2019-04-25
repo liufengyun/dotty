@@ -177,6 +177,21 @@ object Annotations {
         else None
     }
 
+    /** Extractor for init annotations */
+    object Use {
+      def apply(tp: Type)(implicit ctx: Context): Annotation = {
+        val tree = New(defn.UseAnnotType.appliedTo(tp), Nil)
+        ConcreteAnnotation(tree)
+      }
+
+      def unapply(ann: Annotation)(implicit ctx: Context): Option[Type] =
+        if (ann.symbol == defn.UseAnnot) {
+          val AppliedType(tycon, arg :: Nil) = ann.tree.tpe
+          Some(arg)
+        }
+        else None
+    }
+
     def makeSourceFile(path: String)(implicit ctx: Context): Annotation =
       apply(defn.SourceFileAnnot, Literal(Constant(path)))
   }
