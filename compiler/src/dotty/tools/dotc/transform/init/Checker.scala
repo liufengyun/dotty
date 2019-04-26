@@ -51,7 +51,7 @@ object Checker {
     if (!cdef.symbol.is(Final)) {
       val primCtor = cdef.symbol.primaryConstructor
       val initCode = constructorCode(cdef)
-      PrepareInlineable.registerInlineInfo(primCtor, implicit ctx => initCode)(ctx)
+      primCtor.addAnnotation(Annotations.ConcreteBodyAnnotation(initCode))
     }
 
   def getConstructorCode(cls: ClassSymbol)(implicit ctx: Context): Tree =

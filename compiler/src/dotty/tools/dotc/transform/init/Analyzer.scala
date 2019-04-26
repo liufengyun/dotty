@@ -94,7 +94,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     }
 
     // template body
-    stats.foreach(checkStat(cls, _))
+    stats.foreach(checkStat(curCls, _))
   }
 
   /** The capture on `this` */
@@ -109,10 +109,14 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
         debug(tp.symbol.show + " -> " + res.map(_.show).mkString(", "))
         res
       case tp: ThisType  =>
-        ctx.error("Leak of `this` in constructor", pos)
+        ctx.error(s"Leak of ${tp.cls.name.show}.this", pos)
         Set()
+      case tp: TypeRef =>
+        // handle inner class
+        val res = tp.symbol.uses.toSet
+        debug(tp.symbol.show + " -> " + res.map(_.show).mkString(", "))
+        res
       case _ =>
-        // TODO: handle inner class
         Set()
     }
 

@@ -50,6 +50,8 @@ class CaptureAnalyzer extends MiniPhase with IdentityDenotTransformer { thisPhas
     val cls = cdef.symbol.asClass
     val tmpl @ Template(constr, parents, _, _) = cdef.rhs
 
+    // TODO: optimize performance with only one pass
+    // Not a problem in practice, as class definitions are shallow
     def analyze(sym: Symbol, tree: Tree) = {
       val analysis = new CaptureAnalyzer.CaptureAnalysis(cls)
       val frees = analysis(Set.empty, tree)
@@ -65,9 +67,10 @@ class CaptureAnalyzer extends MiniPhase with IdentityDenotTransformer { thisPhas
       case ddef: DefDef if !ddef.symbol.is(Deferred) && !ddef.symbol.is(InlineMethod) =>
         // don't distinguish effects of constructor on its outer
         analyze(ddef.symbol, ddef.rhs)
-      case _          =>
-        // TODO: approximate inner class effects on its immediate outer
-        // TODO: optimize performance with only one pass
+      case cdef: TypeDef if cdef.isClassDef =>
+        // approximate inner class effects on its immediate outer
+        analyze(cdef.symbol, cdef)
+      case _ =>
     }
 
     cdef
@@ -98,11 +101,21 @@ object CaptureAnalyzer {
         tp.symbol.is(Module) && tp.symbol.moduleClass == on
       case TermRef(ThisType(tref), _) => tref.symbol == on
       case TypeRef(ThisType(tref), _) => tref.symbol == on
+      case ThisType(tref) => tref.symbol == on
       case _ => false
     }
 
-    def apply(tp: Type)(implicit ctx: Context): Set[Type] =
-      tp.namedPartsWith(ntp => free(ntp), excludeLowerBounds = true).toSet
+    def addIfFree(res: Set[Type], tp: Type)(implicit ctx: Context) =
+      if (free(tp)) res + tp
+      else res
+
+    def addPart(res: Set[Type], tp: Type)(implicit ctx: Context): Set[Type] =
+      // cannot use the following, as it goes to underlying
+      // tp.namedPartsWith(ntp => free(ntp), excludeLowerBounds = true).toSet
+      new TypeAccumulator[Set[Type]] {
+        def apply(res: Set[Type], tp: Type) =
+          if (free(tp)) res + tp else foldOver(res, tp)
+      }.apply(res, tp)
 
     def apply(res: Set[Type], tree: Tree)(implicit ctx: Context) =
       tree match {
@@ -110,25 +123,17 @@ object CaptureAnalyzer {
           // ignore all type trees
           res
         case _: Ident if tree.symbol.isTerm =>
-          if (free(tree.tpe)) res + tree.tpe
-          else res ++ apply(tree.tpe)
-        case _: This =>
-          res + tree.tpe
-        case Select(_: Super, _) =>
-          res + tree.tpe
-        case Select(thist: This, _) =>
-          res + tree.tpe
+          addPart(res, tree.tpe)
+        case _: This | Select(_: Super, _) | Select(_: This, _) =>
+          addIfFree(res, tree.tpe)
         case Select(qualifier, _) =>
           if (free(tree.tpe)) res + tree.tpe
           else foldOver(res, tree)
         // case tree @ Assign(sel: Select, rhs) =>
         //   annotate(sel, rhs)
-        case NewEx(tp, init, argss) =>
-          val effs =
-            if (free(tp)) res + init
-            else res ++ apply(tp.dealias.typeConstructor)
-
-          argss.flatten.foldRight(effs) { (arg, res) => apply(res, arg) }
+        case New(tp) =>
+          val typCon = tp.tpe.dealias.typeConstructor
+          addPart(res, typCon)
         case _ =>
           foldOver(res, tree)
       }
