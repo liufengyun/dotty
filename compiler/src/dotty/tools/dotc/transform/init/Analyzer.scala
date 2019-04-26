@@ -17,6 +17,7 @@ import Symbols._
 import Denotations._
 import SymDenotations._
 import Types._
+import Annotations._
 import Decorators._
 import DenotTransformers._
 import util.SourcePosition
@@ -43,6 +44,13 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     }
   }
 
+  object Function {
+    def unapply(tree: Tree)(implicit ctx: Context): Option[Tree] = tree match {
+      case Block((ddef: DefDef) :: Nil, Closure(_, meth, _)) if meth.symbol == ddef.symbol => Some(ddef.rhs)
+      case _ => None
+    }
+  }
+
   /** SLS 5.1
     *
     *  Template Evaluation Consider a template `sc with mt1 with mtn { stats }`.
@@ -58,20 +66,22 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     *    order of occurrence in the linearization.
     *  - Finally the statement sequence stats is evaluated.
     */
-  def checkTemplate(curCls: ClassSymbol)(implicit ctx: Context): Unit = {
-    if (!curCls.primaryConstructor.hasAnnotation(defn.BodyAnnot)) return
+  def checkTemplate(curCls: ClassSymbol, body: Tree)(implicit ctx: Context): Unit = {
+    if (body.isEmpty) return
 
     curCls.paramAccessors.foreach(sym => initialized += sym)
 
-    val Block(sc :: stats, _) = Inliner.bodyToInline(curCls.primaryConstructor)
+    val Block(sc :: stats, _) = body
     // super constructor call
     sc match {
       case tree @ NewEx(tref, init, argss) =>
         // Note: effects on outer already handled, only care about `this`
-        checkTemplate(tref.classSymbol.asClass)
+        val cls = tref.classSymbol.asClass
+        checkTemplate(cls, Checker.getConstructorCode(cls))
         // TODO: check possible 2nd constructor effects
       case tree =>
-        checkTemplate(tree.tpe.classSymbol.asClass)
+        val cls = tree.tpe.classSymbol.asClass
+        checkTemplate(cls, Checker.getConstructorCode(cls))
     }
 
     // mixin-evaluation of traits
@@ -152,7 +162,12 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
 
     tree match {
       case vdef: ValDef if !vdef.rhs.isEmpty =>
-        check(vdef.rhs)
+        vdef.rhs match {
+          case Function(body) =>
+            val frees = capture(cls, body)
+            frees.foreach { tp => vdef.symbol.addAnnotation(Annotation.Use(tp)) }
+          case _ => check(vdef.rhs)
+        }
         initialized += vdef.symbol
       case _ =>
         check(tree)
