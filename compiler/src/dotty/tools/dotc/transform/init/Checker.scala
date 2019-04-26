@@ -26,29 +26,22 @@ object Checker {
   val name = "initChecker"
 }
 
-class Checker extends Phase { thisPhase =>
+class Checker extends MiniPhase { thisPhase =>
   import tpd._
 
   override def phaseName: String = Checker.name
 
-  def checkInit(cdef: TypeDef)(implicit ctx: Context): Unit = {
+  override def transformTypeDef(cdef: TypeDef)(implicit ctx: Context): Tree = {
+    if (!ctx.settings.YcheckInit.value || !cdef.isClassDef) return cdef
+
     val cls = cdef.symbol.asClass
-    if (cls.is(AbstractOrTrait)) return
+    if (!cls.is(AbstractOrTrait)) {
+      debug("*************************************")
+      debug("checking " + cls.show)
+      new Analyzer(cls).checkTemplate(cls)
+      debug("*************************************")
+    }
 
-    new Analyzer(cls).check(cdef)
-  }
-
-  def run(implicit ctx: Context): Unit = {
-    if (!ctx.settings.YcheckInit.value) return
-
-    val unit = ctx.compilationUnit
-    work(unit.tpdTree)(ctx.fresh.setPhase(this.next))
-  }
-
-  def work(tree: Tree)(implicit ctx: Context): Unit = tree match {
-    case PackageDef(_, stats) =>
-      stats.foreach(stat => work(stat))
-    case tree: TypeDef if tree.isClassDef => checkInit(tree)
-    case _ =>
+    cdef
   }
 }

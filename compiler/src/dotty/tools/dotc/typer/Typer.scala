@@ -1712,15 +1712,22 @@ class Typer extends Namer
       for (deriver <- cdef.removeAttachment(Deriver))
         cdef1.putAttachment(Deriver, deriver)
 
-      val initCode = tpd.Block(body1.filter {
+      // add body to primary constructor
+      //
+      // It seems there is no need to remember for effectively final classes,
+      // however, it will be useful for inner/local class analysis.
+      //
+      // Remember parent calls for classes:
+      //   1. which parent constructor is called
+      val stats = body1.filter {
         case vdef: ValDef =>
           !vdef.symbol.is(ParamAccessor) && !vdef.symbol.is(Lazy) && !vdef.symbol.is(Deferred)
-        case _: DefTree =>
-          false
-        case _ => true
-      }, tpd.unitLiteral)
+        case _: DefTree => false
+        case _          => true
+      }
+      val statsWithInit = if (cls.is(Trait)) stats else parents1.head +: stats
+      val initCode = tpd.Block(statsWithInit, tpd.unitLiteral)
 
-      // add body to primary constructor
       PrepareInlineable.registerInlineInfo(constr1.symbol, implicit ctx => initCode)(ctx)
 
       cdef1
