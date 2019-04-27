@@ -73,6 +73,9 @@ class CaptureAnalyzer extends MiniPhase with IdentityDenotTransformer { thisPhas
       case _ =>
     }
 
+    // link class body to symbol via annotation
+    Checker.registerConstructorCode(cdef)
+
     cdef
   }
 }
@@ -81,17 +84,6 @@ object CaptureAnalyzer {
   import tpd._
 
   val name = "captureAnalyzer"
-
-  object NewEx {
-    def unapply(tree: Tree)(implicit ctx: Context): Option[(Type, Type, List[List[Tree]])] = {
-      val (fn, targs, vargss) = tpd.decomposeCall(tree)
-      if (!fn.symbol.isConstructor || !tree.isInstanceOf[Apply]) None
-      else fn match {
-        case Select(New(tpt), _) => Some((tpt.tpe,  fn.tpe, vargss))
-        case _ => None
-      }
-    }
-  }
 
   class CaptureAnalysis(on: Symbol) extends TreeAccumulator[Set[Type]] {
     def free(tp: Type)(implicit ctx: Context): Boolean = tp.dealias match {

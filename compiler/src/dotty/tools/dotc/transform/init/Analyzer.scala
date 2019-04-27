@@ -28,30 +28,6 @@ import collection.mutable
 class Analyzer(cls: ClassSymbol) { analyzer =>
   import tpd._
 
-  object NewEx {
-    def extract(tp: Type)(implicit ctx: Context): TypeRef = tp.dealias match {
-      case tref: TypeRef => tref
-      case AppliedType(tref: TypeRef, targs) => tref
-      case hktp: HKTypeLambda => extract(hktp.hkResult)
-    }
-
-    def unapply(tree: Tree)(implicit ctx: Context): Option[(TypeRef, Symbol, List[List[Tree]])] = {
-      val (fn, targs, vargss) = tpd.decomposeCall(tree)
-      if (!fn.symbol.isConstructor || !tree.isInstanceOf[Apply]) None
-      else {
-        val Select(New(tpt), _) = fn
-        Some((extract(tpt.tpe),  fn.symbol, vargss))
-      }
-    }
-  }
-
-  object Function {
-    def unapply(tree: Tree)(implicit ctx: Context): Option[Tree] = tree match {
-      case Block((ddef: DefDef) :: Nil, Closure(_, meth, _)) if meth.symbol == ddef.symbol => Some(ddef.rhs)
-      case _ => None
-    }
-  }
-
   /** SLS 5.1
     *
     *  Template Evaluation Consider a template `sc with mt1 with mtn { stats }`.
@@ -80,13 +56,14 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     // Note: effects on outer already handled, only care about `this`
     val superCls = parentCtor.owner.asClass
     checkTemplate(superCls, Checker.getSuperConstructor(superCls), Checker.getConstructorCode(superCls))
-    // TODO: distinguish and check possible 2nd constructor effects
+    // TODO: check possible 2nd constructor effects
 
     // mixin-evaluation of traits
     curCls.typeRef.baseClasses.tail.takeWhile(_ != superCls).reverse.foreach { base =>
       base.paramAccessors.foreach(sym => initialized += sym)
-      if (base.primaryConstructor.hasAnnotation(defn.BodyAnnot)) {
-        val Block(stats, _) = Inliner.bodyToInline(base.primaryConstructor)
+      val body = Checker.getConstructorCode(base)
+      if (!body.isEmpty) {
+        val Block(stats, _) = body
         stats.foreach(checkStat(base, _))
       }
     }
@@ -166,7 +143,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     tree match {
       case vdef: ValDef if !vdef.rhs.isEmpty =>
         vdef.rhs match {
-          case Function(body) =>
+          case closureDef(body) =>
             val frees = capture(cls, body)
             frees.foreach { tp => vdef.symbol.addAnnotation(Annotation.Use(tp)) }
           case _ => check(vdef.rhs)

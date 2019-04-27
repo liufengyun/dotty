@@ -1712,10 +1712,6 @@ class Typer extends Namer
       for (deriver <- cdef.removeAttachment(Deriver))
         cdef1.putAttachment(Deriver, deriver)
 
-      // add body to primary constructor
-      import transform.init.Checker
-      Checker.registerConstructorCode(cdef1)
-
       cdef1
 
       // todo later: check that

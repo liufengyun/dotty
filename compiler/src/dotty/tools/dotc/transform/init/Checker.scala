@@ -52,8 +52,10 @@ object Checker {
       val initCode = constructorCode(cdef.symbol, tmpl)
       cls.addAnnotation(Annotations.ConcreteBodyAnnotation(initCode))
       // remember the super constructor called
-      // TODO: remember the actual constructor -- Dotty throws exception
-      cls.primaryConstructor.addAnnotation(Annotation.Use(tmpl.parents.head.tpe))
+      if (!cls.is(Trait)) {
+        val superCtor = constructorSymbol(tmpl.parents.head)
+        cls.primaryConstructor.addAnnotation(Annotation.Use(superCtor.termRef))
+      }
     }
 
   def getConstructorCode(cls: ClassSymbol)(implicit ctx: Context): Tree =
@@ -62,12 +64,33 @@ object Checker {
 
   def getSuperConstructor(cls: ClassSymbol)(implicit ctx: Context): Symbol =
     cls.primaryConstructor.uses match {
-      case tp :: _ => constructorSym(tp)
-      case _       => NoSymbol
+      case (tp: TermRef) :: _ => tp.symbol
+      case _                  => NoSymbol
     }
 
-  private def constructorSym(tp: Type)(implicit ctx: Context): Symbol =
-    tp.classSymbol.primaryConstructor
+  private def constructorSymbol(tree: Tree)(implicit ctx: Context): Symbol = tree match {
+    case NewEx(_, sym, _) => sym
+    case _ => tree.symbol.primaryConstructor
+  }
+
+  object NewEx {
+    def extract(tp: Type)(implicit ctx: Context): TypeRef = tp.dealias match {
+      case tref: TypeRef => tref
+      case AppliedType(tref: TypeRef, targs) => tref
+      case hktp: HKTypeLambda => extract(hktp.hkResult)
+    }
+
+    def unapply(tree: Tree)(implicit ctx: Context): Option[(TypeRef, Symbol, List[List[Tree]])] = tree match {
+      case Block(_, expr) => unapply(expr)
+      case _ =>
+        val (fn, targs, vargss) = tpd.decomposeCall(tree)
+        if (!fn.symbol.isConstructor || !tree.isInstanceOf[Apply]) None
+        else {
+          val Select(New(tpt), _) = fn
+          Some((extract(tpt.tpe),  fn.symbol, vargss))
+        }
+    }
+  }
 }
 
 class Checker extends MiniPhase { thisPhase =>
@@ -82,7 +105,7 @@ class Checker extends MiniPhase { thisPhase =>
       debug("checking " + cls.show)
       val tmpl = cdef.rhs.asInstanceOf[Template]
       val body = Checker.constructorCode(cdef.symbol, tmpl)
-      new Analyzer(cls).checkTemplate(cls, Checker.constructorSym(tmpl.parents.head.tpe), body)
+      new Analyzer(cls).checkTemplate(cls, Checker.constructorSymbol(tmpl.parents.head), body)
       debug("*************************************")
     }
 
