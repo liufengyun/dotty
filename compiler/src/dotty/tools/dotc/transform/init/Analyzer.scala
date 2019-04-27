@@ -110,7 +110,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
         debug(tp.symbol.show + " -> " + res.map(_.show).mkString(", "))
         res
       case tp: ThisType  =>
-        ctx.error(s"Leak of ${tp.cls.name.show}.this", pos)
+        ctx.warning(s"Leak of ${tp.cls.name.show}.this", pos)
         Set()
       case tp: TypeRef =>
         // handle inner class
@@ -162,7 +162,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
       debug("initialized = " + initialized.map(_.show).mkString(", "))
       val uninit = effects -- initialized
       if (uninit.nonEmpty)
-        ctx.error(s"The code access uninit field(s) when instantiating ${this.cls.show}: " + uninit.map(_.termRef.show).mkString(", "), tree.sourcePos)
+        ctx.warning(s"The code access uninit field(s) when instantiating ${this.cls.show}: " + uninit.map(_.termRef.show).mkString(", "), tree.sourcePos)
     }
 
     tree match {

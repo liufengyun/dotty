@@ -176,7 +176,7 @@ class CompilationTests extends ParallelTesting {
 
   @Test def negInit: Unit = {
     implicit val testGroup: TestGroup = TestGroup("compileNeg")
-    compileFilesInDir("tests/neg-custom-args/safe-init", defaultOptions and "-Ycheck-init")
+    compileFilesInDir("tests/neg-custom-args/safe-init", defaultOptions and "-Ycheck-init" and "-Xfatal-warnings")
   }.checkExpectedErrors()
 
   @Test def fuzzyAll: Unit = {
