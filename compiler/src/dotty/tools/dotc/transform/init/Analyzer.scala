@@ -32,6 +32,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     def extract(tp: Type)(implicit ctx: Context): TypeRef = tp.dealias match {
       case tref: TypeRef => tref
       case AppliedType(tref: TypeRef, targs) => tref
+      case hktp: HKTypeLambda => extract(hktp.hkResult)
     }
 
     def unapply(tree: Tree)(implicit ctx: Context): Option[(TypeRef, Symbol, List[List[Tree]])] = {

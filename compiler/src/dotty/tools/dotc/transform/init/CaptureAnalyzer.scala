@@ -122,6 +122,8 @@ object CaptureAnalyzer {
         case tree if tree.isType =>
           // ignore all type trees
           res
+        case _: Import =>
+          res
         case _: Ident if tree.symbol.isTerm =>
           addPart(res, tree.tpe)
         case _: This | Select(_: Super, _) | Select(_: This, _) =>

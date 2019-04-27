@@ -51,6 +51,8 @@ object Checker {
     if (!cdef.symbol.is(Final)) {
       val primCtor = cdef.symbol.primaryConstructor
       val initCode = constructorCode(cdef)
+      // RefChecks will ignore the code on primary constructor,
+      // thus we may special handle the first statement of the block
       primCtor.addAnnotation(Annotations.ConcreteBodyAnnotation(initCode))
     }
 
