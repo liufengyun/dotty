@@ -675,8 +675,6 @@ class TreePickler(pickler: TastyPickler) {
       // See tests/pickling/i3149.scala
     case _ =>
       // inline bodies are reconstituted automatically when unpickling
-      // constructor code is small compared to the template body,
-      // thus it's more efficient to pickle/unpickle the small part.
       ann.symbol == defn.BodyAnnot
   }
 
