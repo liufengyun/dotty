@@ -17,6 +17,7 @@ import Symbols._
 import Denotations._
 import SymDenotations._
 import Types._
+import Annotations._
 import Decorators._
 import DenotTransformers._
 import config.Printers.init.{ println => debug }
@@ -34,31 +35,39 @@ object Checker {
    * Remember parent calls for classes:
    *   1. which parent constructor is called
    */
-  def constructorCode(cdef: TypeDef)(implicit ctx: Context) = {
-    val cls = cdef.symbol
-    val tmpl = cdef.rhs.asInstanceOf[Template]
+  def constructorCode(cls: Symbol, tmpl: Template)(implicit ctx: Context) = {
     val stats = tmpl.body.filter {
       case vdef: ValDef =>
         !vdef.symbol.is(ParamAccessor) && !vdef.symbol.is(Lazy) && !vdef.symbol.is(Deferred)
       case _: DefTree => false
       case _          => true
     }
-    val statsWithInit = if (cls.is(Trait)) stats else tmpl.parents.head +: stats
-    tpd.Block(statsWithInit, tpd.unitLiteral)
+    tpd.Block(stats, tpd.unitLiteral)
   }
 
   def registerConstructorCode(cdef: TypeDef)(implicit ctx: Context) =
     if (!cdef.symbol.is(Final)) {
-      val primCtor = cdef.symbol.primaryConstructor
-      val initCode = constructorCode(cdef)
-      // RefChecks will ignore the code on primary constructor,
-      // thus we may special handle the first statement of the block
-      primCtor.addAnnotation(Annotations.ConcreteBodyAnnotation(initCode))
+      val cls = cdef.symbol
+      val tmpl = cdef.rhs.asInstanceOf[Template]
+      val initCode = constructorCode(cdef.symbol, tmpl)
+      cls.addAnnotation(Annotations.ConcreteBodyAnnotation(initCode))
+      // remember the super constructor called
+      // TODO: remember the actual constructor -- Dotty throws exception
+      cls.primaryConstructor.addAnnotation(Annotation.Use(tmpl.parents.head.tpe))
     }
 
   def getConstructorCode(cls: ClassSymbol)(implicit ctx: Context): Tree =
-    if (!cls.primaryConstructor.hasAnnotation(defn.BodyAnnot)) EmptyTree
-    else Inliner.bodyToInline(cls.primaryConstructor)
+    if (!cls.hasAnnotation(defn.BodyAnnot)) EmptyTree
+    else Inliner.bodyToInline(cls)
+
+  def getSuperConstructor(cls: ClassSymbol)(implicit ctx: Context): Symbol =
+    cls.primaryConstructor.uses match {
+      case tp :: _ => constructorSym(tp)
+      case _       => NoSymbol
+    }
+
+  private def constructorSym(tp: Type)(implicit ctx: Context): Symbol =
+    tp.classSymbol.primaryConstructor
 }
 
 class Checker extends MiniPhase { thisPhase =>
@@ -71,8 +80,9 @@ class Checker extends MiniPhase { thisPhase =>
     if (!cls.is(AbstractOrTrait)) {
       debug("*************************************")
       debug("checking " + cls.show)
-      val body = Checker.constructorCode(cdef)
-      new Analyzer(cls).checkTemplate(cls, body)
+      val tmpl = cdef.rhs.asInstanceOf[Template]
+      val body = Checker.constructorCode(cdef.symbol, tmpl)
+      new Analyzer(cls).checkTemplate(cls, Checker.constructorSym(tmpl.parents.head.tpe), body)
       debug("*************************************")
     }
 

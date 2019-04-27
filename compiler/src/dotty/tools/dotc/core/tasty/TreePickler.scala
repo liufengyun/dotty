@@ -677,7 +677,7 @@ class TreePickler(pickler: TastyPickler) {
       // inline bodies are reconstituted automatically when unpickling
       // constructor code is small compared to the template body,
       // thus it's more efficient to pickle/unpickle the small part.
-      ann.symbol == defn.BodyAnnot && owner.is(Method)
+      ann.symbol == defn.BodyAnnot
   }
 
   def pickleAnnotation(owner: Symbol, ann: Annotation)(implicit ctx: Context): Unit =

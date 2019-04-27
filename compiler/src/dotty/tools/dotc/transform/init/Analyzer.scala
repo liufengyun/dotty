@@ -67,26 +67,23 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     *    order of occurrence in the linearization.
     *  - Finally the statement sequence stats is evaluated.
     */
-  def checkTemplate(curCls: ClassSymbol, body: Tree)(implicit ctx: Context): Unit = {
-    if (body.isEmpty) return
+  def checkTemplate(curCls: ClassSymbol, parentCtor: Symbol, body: Tree)(implicit ctx: Context): Unit = {
+    debug("checking constructor of " + curCls.show)
+    if (body.isEmpty) {
+      debug("warning: no constructor of " + curCls.show + " found")
+      return
+    }
 
     curCls.paramAccessors.foreach(sym => initialized += sym)
 
-    val Block(sc :: stats, _) = body
     // super constructor call
-    sc match {
-      case tree @ NewEx(tref, init, argss) =>
-        // Note: effects on outer already handled, only care about `this`
-        val cls = tref.classSymbol.asClass
-        checkTemplate(cls, Checker.getConstructorCode(cls))
-        // TODO: check possible 2nd constructor effects
-      case tree =>
-        val cls = tree.tpe.classSymbol.asClass
-        checkTemplate(cls, Checker.getConstructorCode(cls))
-    }
+    // Note: effects on outer already handled, only care about `this`
+    val superCls = parentCtor.owner.asClass
+    checkTemplate(superCls, Checker.getSuperConstructor(superCls), Checker.getConstructorCode(superCls))
+    // TODO: distinguish and check possible 2nd constructor effects
 
     // mixin-evaluation of traits
-    curCls.typeRef.baseClasses.tail.takeWhile(_ != sc.tpe.classSymbol).reverse.foreach { base =>
+    curCls.typeRef.baseClasses.tail.takeWhile(_ != superCls).reverse.foreach { base =>
       base.paramAccessors.foreach(sym => initialized += sym)
       if (base.primaryConstructor.hasAnnotation(defn.BodyAnnot)) {
         val Block(stats, _) = Inliner.bodyToInline(base.primaryConstructor)
@@ -95,6 +92,7 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     }
 
     // template body
+    val Block(stats, _) = body
     stats.foreach(checkStat(curCls, _))
   }
 
