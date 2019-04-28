@@ -12,7 +12,7 @@ class A {
 }
 
 class B extends A {
-  val o = new O               // error
-  println((new o.B).f)
+  val o = new O
+  println((new o.B).f)     // error
   override val n = 50
 }

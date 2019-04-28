@@ -11,8 +11,8 @@ object NameKinds {
 
   class ClassifiedNameKind(tag: Int, val infoString: String) extends NameKind(tag) {
     type ThisInfo = Info
-    val info: Info = new Info  // error
-    info.kind
+    val info: Info = new Info
+    info.kind                     // error
   }
 }
 
