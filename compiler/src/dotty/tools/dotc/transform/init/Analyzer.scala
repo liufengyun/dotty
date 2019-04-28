@@ -131,14 +131,34 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
     //       It does not make sense to report error in pre-compiled souce code.
     def check(tree: Tree) = {
       debug("checking " + tree.show)
+      debug("initialized = " + initialized.map(_.show).mkString(", "))
       val free = capture(cls, tree)
       debug("free = " + free.map(_.show).mkString(", "))
       val effects = fixpoint(free, tree.sourcePos)
       debug("effects = " + effects.map(_.show).mkString(", "))
-      debug("initialized = " + initialized.map(_.show).mkString(", "))
       val uninit = effects -- initialized
       if (uninit.nonEmpty)
         ctx.warning(s"The code access uninit field(s) when instantiating ${this.cls.show}: " + uninit.map(_.termRef.show).mkString(", "), tree.sourcePos)
+    }
+
+    import Checker.NewEx
+
+    /** treat synthetic apply for case classes as new expression */
+    object CaseApply {
+      def unapply(tree: Tree): Option[(TypeRef, List[List[Tree]])] = {
+        val (fn, targs, vargss) = tpd.decomposeCall(tree)
+        fn.tpe match {
+          case app @ TermRef(obj @ TermRef(tref: ThisType, _), _)
+          if tref.cls == cls &&
+             app.name == nme.apply &&
+             app.symbol.is(Synthetic) &&
+             obj.symbol.companionClass.is(Case) =>
+
+            Some((obj.symbol.companionClass.typeRef, vargss))
+
+          case _ => None
+        }
+      }
     }
 
     tree match {
@@ -147,7 +167,21 @@ class Analyzer(cls: ClassSymbol) { analyzer =>
           case closureDef(body) =>
             val frees = capture(cls, body)
             frees.foreach { tp => vdef.symbol.addAnnotation(Annotation.Use(tp)) }
-          case _ => check(vdef.rhs)
+          case NewEx(tp @ TypeRef(prefix: ThisType, _), _, argss) if prefix.cls == cls =>
+            // one-level visibility
+            argss.flatten.foreach(check)
+            // TODO: constructor effects of inner class are actual
+            vdef.symbol.addAnnotation(Annotation.Use(tp))
+          case CaseApply(tref, argss) =>
+            // one-level visibility
+            argss.flatten.foreach(check)
+            // TODO: constructor effects of inner class are actual
+            vdef.symbol.addAnnotation(Annotation.Use(tref))
+          case tree: This if tree.tpe <:< cls.typeRef =>
+            // alias of this
+            vdef.symbol.addAnnotation(Annotation.Use(tree.tpe))
+          case _ =>
+            check(vdef.rhs)
         }
         initialized += vdef.symbol
       case _ =>
