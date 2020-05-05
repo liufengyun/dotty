@@ -314,7 +314,7 @@ class CommunityBuildTest:
         |""".stripMargin)
     }
 
-    val testsCompletedSuccessfully = execTimes(exec(projectDir, command, arguments: _*), 3)
+    val testsCompletedSuccessfully = execTimes(exec(projectDir, command, arguments: _*), 1)
 
     if (!testsCompletedSuccessfully) {
       fail(s"""
