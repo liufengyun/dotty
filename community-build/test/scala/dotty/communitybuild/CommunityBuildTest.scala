@@ -85,7 +85,7 @@ final case class SbtCommunityProject(
     dependencies: List[CommunityProject] = Nil,
     sbtPublishCommand: String = null) extends CommunityProject:
   override val binaryName: String = "sbt"
-  private val baseCommand = s";clean ;set logLevel in Global := Level.Error ;set updateOptions in Global ~= (_.withLatestSnapshots(false)) ;++$compilerVersion! "
+  private val baseCommand = s""";clean ;set updateOptions in Global ~= (_.withLatestSnapshots(false)); set scalacOptions in Global += "-Ycheck-init"; ++$compilerVersion! """
   override val testCommand = s"$baseCommand$sbtTestCommand"
   override val publishCommand = s"$baseCommand$sbtPublishCommand"
 
