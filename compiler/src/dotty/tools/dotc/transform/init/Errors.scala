@@ -108,12 +108,7 @@ object Errors {
 
     def show(implicit ctx: Context): String = {
       var index = 0
-      "Promoting the value to fully-initialized is unsafe.\n" + stacktrace +
-        "\nThe unsafe promotion may cause the following problem(s):\n" +
-        (errors.flatMap(_.flatten).map { error =>
-          index += 1
-          s"\n$index. " + error.show + error.stacktrace
-        }.mkString)
+      "Promoting the value to fully-initialized is unsafe.\n" + stacktrace
     }
   }
 }
