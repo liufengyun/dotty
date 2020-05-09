@@ -359,7 +359,7 @@ object Checking {
             (warm.outerFor(cls), Effects.empty)
 
           case _: Cold =>
-            throw new Exception("Unexpected code reached")
+            (pot1.toPots, Effects.empty)
 
           case _ =>
             val (pots, effs) = expand(pot1)
