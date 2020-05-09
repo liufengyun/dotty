@@ -65,7 +65,7 @@ object Errors {
     def show(implicit ctx: Context): String =
       "Access non-initialized field " + field.name.show + "."
 
-    override def report(implicit ctx: Context): Unit = ctx.error(show + stacktrace, field.sourcePos)
+    override def report(implicit ctx: Context): Unit = ctx.warning(show + stacktrace, field.sourcePos)
   }
 
   /** Promote `this` under initialization to fully-initialized */
