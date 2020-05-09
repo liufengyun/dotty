@@ -158,7 +158,6 @@ object Build {
       "-deprecation",
       "-unchecked",
       // "-Xfatal-warnings",
-      "-Ycheck-init",
       "-encoding", "UTF8",
       "-language:existentials,higherKinds,implicitConversions,postfixOps"
     ),
@@ -290,6 +289,7 @@ object Build {
     // Use the same name as the non-bootstrapped projects for the artifacts
     moduleName ~= { _.stripSuffix("-bootstrapped") },
 
+    scalacOptions += "-Ycheck-init",
     // Enforce that the only Scala 2 classfiles we unpickle come from scala-library
     /*
     scalacOptions ++= {
