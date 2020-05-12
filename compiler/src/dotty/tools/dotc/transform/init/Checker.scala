@@ -13,9 +13,27 @@ import Types._
 import dotty.tools.dotc.transform._
 import MegaPhase._
 
+import dotty.tools.dotc.util._
 
 import scala.collection.mutable
+import scala.collection.immutable
 
+object Checker {
+  enum Kind { case ThisCall, ThisAccess, WarmCall, WarmAccess }
+  private val data = mutable.Map.empty[Kind, immutable.Set[SourcePosition]].withDefault(k => immutable.Set.empty[SourcePosition])
+
+  def thisCall(pos: SourcePosition) = data(Kind.ThisCall) = data(Kind.ThisCall) + pos
+  def thisAccess(pos: SourcePosition) = data(Kind.ThisAccess) = data(Kind.ThisAccess) + pos
+  def warmCall(pos: SourcePosition) = data(Kind.WarmCall) = data(Kind.WarmCall) + pos
+  def warmAccess(pos: SourcePosition) = data(Kind.WarmAccess) = data(Kind.WarmAccess) + pos
+
+  def report() = {
+    println("this call: " + data(Kind.ThisCall))
+    println("this access: " + data(Kind.ThisAccess))
+    println("warm call: " + data(Kind.WarmCall))
+    println("warm access: " + data(Kind.WarmAccess))
+  }
+}
 
 class Checker extends MiniPhase {
   import tpd._
