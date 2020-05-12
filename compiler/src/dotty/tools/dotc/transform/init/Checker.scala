@@ -32,6 +32,8 @@ object Checker {
     println("this access: " + data(Kind.ThisAccess).size)
     println("warm call: " + data(Kind.WarmCall).size)
     println("warm access: " + data(Kind.WarmAccess).size)
+
+    data.clear()
   }
 }
 
