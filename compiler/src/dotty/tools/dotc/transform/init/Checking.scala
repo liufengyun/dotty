@@ -183,6 +183,8 @@ object Checking {
             case ThisRef(cls) =>
               assert(cls == state.thisClass, "unexpected potential " + pot.show)
 
+              Checker.thisAccess(eff.source.sourcePos)
+
               val target = resolve(cls, field)
               if (target.is(Flags.Lazy)) check(MethodCall(pot, target)(eff.source))
               else if (!state.fieldsInited.contains(target)) AccessNonInit(target, state2.path).toErrors
@@ -191,12 +193,17 @@ object Checking {
             case SuperRef(ThisRef(cls), supercls) =>
               assert(cls == state.thisClass, "unexpected potential " + pot.show)
 
+              Checker.thisAccess(eff.source.sourcePos)
+
               val target = resolveSuper(cls, supercls, field)
               if (target.is(Flags.Lazy)) check(MethodCall(pot, target)(eff.source))
               else if (!state.fieldsInited.contains(target)) AccessNonInit(target, state2.path).toErrors
               else Errors.empty
 
             case Warm(cls, outer) =>
+
+              Checker.warmAccess(eff.source.sourcePos)
+
               // all fields of warm values are initialized
               val target = resolve(cls, field)
               if (target.is(Flags.Lazy)) check(MethodCall(pot, target)(eff.source))
@@ -224,10 +231,14 @@ object Checking {
               if (!target.isOneOf(Flags.Method | Flags.Lazy))
                 check(FieldAccess(pot, target)(eff.source))
               else if (target.isInternal) {
+                Checker.thisCall(eff.source.sourcePos)
                 val effs = thisRef.effectsOf(target)
                 effs.flatMap { check(_) }
               }
-              else CallUnknown(target, eff.source, state2.path).toErrors
+              else {
+                Checker.thisCall(eff.source.sourcePos)
+                CallUnknown(target, eff.source, state2.path).toErrors
+              }
 
             case SuperRef(thisRef @ ThisRef(cls), supercls) =>
               assert(cls == state.thisClass, "unexpected potential " + pot.show)
@@ -236,13 +247,19 @@ object Checking {
               if (!target.is(Flags.Method))
                 check(FieldAccess(pot, target)(eff.source))
               else if (target.isInternal) {
+                Checker.thisCall(eff.source.sourcePos)
                 val effs = thisRef.effectsOf(target)
                 effs.flatMap { check(_) }
               }
-              else CallUnknown(target, eff.source, state2.path).toErrors
+              else {
+                Checker.thisCall(eff.source.sourcePos)
+                CallUnknown(target, eff.source, state2.path).toErrors
+              }
 
             case warm @ Warm(cls, outer) =>
               val target = resolve(cls, sym)
+
+              Checker.warmCall(eff.source.sourcePos)
 
               if (target.isInternal) {
                 val effs = warm.effectsOf(target)

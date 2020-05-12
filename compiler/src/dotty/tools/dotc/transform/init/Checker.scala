@@ -28,10 +28,10 @@ object Checker {
   def warmAccess(pos: SourcePosition) = data(Kind.WarmAccess) = data(Kind.WarmAccess) + pos
 
   def report() = {
-    println("this call: " + data(Kind.ThisCall))
-    println("this access: " + data(Kind.ThisAccess))
-    println("warm call: " + data(Kind.WarmCall))
-    println("warm access: " + data(Kind.WarmAccess))
+    println("this call: " + data(Kind.ThisCall).size)
+    println("this access: " + data(Kind.ThisAccess).size)
+    println("warm call: " + data(Kind.WarmCall).size)
+    println("warm access: " + data(Kind.WarmAccess).size)
   }
 }
 
