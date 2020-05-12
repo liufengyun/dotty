@@ -51,8 +51,8 @@ import collection.mutable
   }
 
   def maybeMonitored[T](op: => T)(implicit ctx: Context): T =
-    if (ctx.settings.YdetailedStats.value) {
-      monitored = true
+    if (true) {
+      monitored = false
       try op
       finally {
         transform.init.Checker.report()
