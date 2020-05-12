@@ -55,6 +55,7 @@ import collection.mutable
       monitored = true
       try op
       finally {
+        transform.init.Checker.report()
         aggregate()
         println()
         println(hits.toList.sortBy(_._2).map{ case (x, y) => s"$x -> $y" } mkString "\n")
