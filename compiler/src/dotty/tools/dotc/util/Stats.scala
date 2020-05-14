@@ -59,7 +59,7 @@ import collection.mutable
         transform.init.Checker.report()
 
         val total = (System.nanoTime - now) / 1000
-        println("init-oopsla: total compilation time: " + total)
+        println("init-oopsla:total-compilation-time:" + total)
 
         aggregate()
         println()

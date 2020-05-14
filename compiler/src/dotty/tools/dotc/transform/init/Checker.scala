@@ -28,10 +28,10 @@ object Checker {
   def warmAccess(pos: SourcePosition) = data(Kind.WarmAccess) = data(Kind.WarmAccess) + pos
 
   def report() = {
-    println("init-oopsla: this call: " + data(Kind.ThisCall).size)
-    println("init-oopsla: this access: " + data(Kind.ThisAccess).size)
-    println("init-oopsla: warm call: " + data(Kind.WarmCall).size)
-    println("init-oopsla: warm access: " + data(Kind.WarmAccess).size)
+    println("init-oopsla:this-call:" + data(Kind.ThisCall).size)
+    println("init-oopsla:this-access:" + data(Kind.ThisAccess).size)
+    println("init-oopsla:warm-call:" + data(Kind.WarmCall).size)
+    println("init-oopsla:warm-access:" + data(Kind.WarmAccess).size)
 
     data.clear()
   }
@@ -80,7 +80,7 @@ class Checker extends MiniPhase {
       Checking.checkClassBody(tree)
 
       val total = (System.nanoTime - now) / 1000
-      println("init-oopsla: init check time: " + total)
+      println("init-oopsla:init-check-time:" + total)
     }
 
 
