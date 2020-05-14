@@ -52,10 +52,15 @@ import collection.mutable
 
   def maybeMonitored[T](op: => T)(implicit ctx: Context): T =
     if (true) {
+      val now = System.nanoTime
       monitored = false
       try op
       finally {
         transform.init.Checker.report()
+
+        val total = (System.nanoTime - now) / 1000
+        println("init-oopsla: total compilation time: " + total)
+
         aggregate()
         println()
         println(hits.toList.sortBy(_._2).map{ case (x, y) => s"$x -> $y" } mkString "\n")
