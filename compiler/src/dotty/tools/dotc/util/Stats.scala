@@ -51,7 +51,7 @@ import collection.mutable
   }
 
   def maybeMonitored[T](op: => T)(implicit ctx: Context): T =
-    if (true) {
+    if (ctx.settings.YprofileInit) {
       val now = System.nanoTime
       monitored = false
       try op
