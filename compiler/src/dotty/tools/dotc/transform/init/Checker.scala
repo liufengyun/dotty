@@ -80,7 +80,9 @@ class Checker extends MiniPhase {
       Checking.checkClassBody(tree)
 
       val total = (System.nanoTime - now) / 1000
-      println("init-oopsla:init-check-time:" + total)
+
+      if (ctx.settings.YprofileInit.value)
+        println("init-oopsla:init-check-time:" + total)
     }
 
 
