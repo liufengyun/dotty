@@ -187,7 +187,7 @@ trait SpaceLogic {
       case (Typ(tp1, _), Prod(tp2, fun, ss)) =>
         isSubType(tp1, tp2)
         && covers(fun, tp1)
-        && isSubspace(Prod(tp2, fun, signature(fun, tp2, ss.length).map(Typ(_, false))), b)
+        && isSubspace(Prod(tp2, fun, signature(fun, tp1, ss.length).map(Typ(_, false))), b)
       case (Prod(_, fun1, ss1), Prod(_, fun2, ss2)) =>
         isSameUnapply(fun1, fun2) && ss1.zip(ss2).forall((isSubspace _).tupled)
     }
@@ -520,10 +520,8 @@ class SpaceEngine(using Context) extends SpaceLogic {
     && tp1 =:= tp2
 
   /** Parameter types of the case class type `tp`. Adapted from `unapplyPlan` in patternMatcher  */
-  def signature(unapp: TermRef, scrutineeTp: Type, argLen: Int): List[Type] = {
+  def signature(unapp: TermRef, scrutineeTp: Type, argLen: Int): List[Type] = trace("signature of " + unapp + ", scrutineeTp = " + scrutineeTp.show) {
     val unappSym = unapp.symbol
-
-    // println("scrutineeTp = " + scrutineeTp.show)
 
     val mt: MethodType = unapp.widen match {
       case mt: MethodType => mt
@@ -718,7 +716,7 @@ class SpaceEngine(using Context) extends SpaceLogic {
   }
 
   /** Whether the counterexample is satisfiable. The space is flattened and non-empty. */
-  def satisfiable(sp: Space): Boolean = {
+  def satisfiable(sp: Space): Boolean = trace("satisfiable " + sp) {
     def impossible: Nothing = throw new AssertionError("`satisfiable` only accepts flattened space.")
 
     def genConstraint(space: Space): List[(Type, Type)] = space match {
@@ -739,11 +737,15 @@ class SpaceEngine(using Context) extends SpaceLogic {
         override def apply(tp: Type): Type = tp match {
           case tref: TypeRef if tref.symbol.is(TypeParam) =>
             tvarMap.getOrElseUpdate(tref.symbol, newTypeVar(tref.underlying.bounds))
+          case bounds: TypeBounds =>
+            WildcardType(bounds)
           case tp => mapOver(tp)
         }
       }
 
-      constrs.forall { case (tp1, tp2) => typeParamMap(tp1) <:< typeParamMap(tp2) }
+      constrs.forall { case (tp1, tp2) =>
+        trace(tp1.show + " <:< " + tp2.show) { typeParamMap(tp1) <:< typeParamMap(tp2) }
+      }
     }
 
     checkConstraint(genConstraint(sp))(using ctx.fresh.setNewTyperState())

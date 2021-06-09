@@ -798,9 +798,18 @@ object TypeOps:
       parent.argInfos.nonEmpty && approximateParent(parent) <:< tp2
     }
 
+    def isPatternTypeSymbol(sym: Symbol) = !sym.isClass && sym.is(Case)
+    val instUndetMap = new TypeMap {
+      def apply(t: Type): Type = t match {
+        case tref: TypeRef if isPatternTypeSymbol(tref.typeSymbol) =>
+          tref.underlying
+        case _ => mapOver(t)
+      }
+    }
+
     def instantiate(): Type = {
       maximizeType(protoTp1, NoSpan, fromScala2x = false)
-      wildApprox(protoTp1)
+      instUndetMap(protoTp1)
     }
 
     if (protoTp1 <:< tp2) instantiate()
