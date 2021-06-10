@@ -716,7 +716,7 @@ class SpaceEngine(using Context) extends SpaceLogic {
   }
 
   /** Whether the counterexample is satisfiable. The space is flattened and non-empty. */
-  def satisfiable(sp: Space): Boolean = trace("satisfiable " + sp) {
+  def satisfiable(sp: Space): Boolean = trace("satisfiable " + show(sp)) {
     def impossible: Nothing = throw new AssertionError("`satisfiable` only accepts flattened space.")
 
     def genConstraint(space: Space): List[(Type, Type)] = space match {
@@ -784,7 +784,7 @@ class SpaceEngine(using Context) extends SpaceLogic {
         else if (tp.classSymbol.is(CaseClass) && !hasCustomUnapply(tp.classSymbol))
         // use constructor syntax for case class
           showType(tp) + params(tp).map(_ => "_").mkString("(", ", ", ")")
-        else if (decomposed) "_: " + showType(tp, showTypeArgs = true)
+        else if (true) "_: " + showType(tp, showTypeArgs = true)
         else "_"
       case Prod(tp, fun, params) =>
         if (ctx.definitions.isTupleType(tp))
