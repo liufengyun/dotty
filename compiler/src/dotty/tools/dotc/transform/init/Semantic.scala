@@ -1296,8 +1296,8 @@ object Semantic:
       case closureDef(ddef) =>
         Fun(ddef.rhs, thisV, klass)
 
-      case PolyFun(body) =>
-        Fun(body, thisV, klass)
+      case PolyFun(ddef) =>
+        Fun(ddef.rhs, thisV, klass)
 
       case Block(stats, expr) =>
         eval(stats, thisV, klass)
